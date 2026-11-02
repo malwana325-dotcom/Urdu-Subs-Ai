@@ -69,7 +69,7 @@ If you have **Android Studio** or command-line tools installed on your computer:
 
 ### Prerequisites
 - Node.js 18+ & npm
-- JDK 17
+- JDK 21 (Required for Capacitor 8 & AGP 8.13)
 - Android Studio with Android SDK 34
 
 ### Steps
