@@ -1,175 +1,451 @@
-import { GoogleGenAI, Modality, Type, GenerateContentResponse } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 import { quotaManager } from "./quota";
-import { 
-  TranslationSettings, 
-  DEFAULT_TRANSLATION_SETTINGS, 
+import {
+  TranslationSettings,
+  DEFAULT_TRANSLATION_SETTINGS,
+  TARGET_LANGUAGES,
   buildTranslationSystemInstruction,
-  TARGET_LANGUAGES 
 } from "./translationSettings";
+import type { GoogleRoutingMode } from "./appPreferences";
 import { stripFormatting } from "../utils/subtitleFormatter";
 
-const PRIMARY_MODEL = "gemini-3.8-flash";
-const FALLBACK_MODEL = "gemini-flash-latest";
+const PRIMARY_MODEL = "gemini-4-hydrogen";
+const FALLBACK_MODEL = "gemini-3.1-flash-lite";
+const GEMINI_KEY_STORAGE_KEY = "urdu_localizer_gemini_api_key";
+
+export function getStoredGeminiApiKey(): string {
+  try {
+    return (localStorage.getItem(GEMINI_KEY_STORAGE_KEY) || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+export function setStoredGeminiApiKey(key: string): void {
+  try {
+    const trimmed = key.trim();
+    if (trimmed) {
+      localStorage.setItem(GEMINI_KEY_STORAGE_KEY, trimmed);
+    } else {
+      localStorage.removeItem(GEMINI_KEY_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+export function clearStoredGeminiApiKey(): void {
+  try {
+    localStorage.removeItem(GEMINI_KEY_STORAGE_KEY);
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+function normalizeClientModel(model?: string): string {
+  const m = String(model || "").trim();
+  if (
+    !m ||
+    m === "gemini-3.8-flash" ||
+    m === "gemini-flash-latest" ||
+    m === "gemini-pro" ||
+    m.startsWith("gemini-1.5") ||
+    m.startsWith("gemini-2.0")
+  ) {
+    return PRIMARY_MODEL;
+  }
+  return m;
+}
 
 export interface TranslationResult {
   index: number;
   translatedText: string;
 }
 
+export interface ServerGeminiStatus {
+  connected: boolean;
+  defaultModel: string;
+  mode?: "direct" | "server";
+  error?: string;
+}
+
 export class GeminiService {
-  private ai: GoogleGenAI;
   private primaryModel: string = PRIMARY_MODEL;
+  private localApiKey: string = "";
 
-  constructor(apiKey?: string, model?: string) {
-    const key = apiKey || process.env.GEMINI_API_KEY;
-    if (!key) {
-      throw new Error("GEMINI_API_KEY is not set");
+  constructor(model?: string, localApiKey?: string) {
+    if (model) this.primaryModel = normalizeClientModel(model);
+    this.localApiKey = (localApiKey ?? getStoredGeminiApiKey()).trim();
+  }
+
+  updateConfig(model: string, localApiKey?: string) {
+    this.primaryModel = normalizeClientModel(model || PRIMARY_MODEL);
+    if (localApiKey !== undefined) {
+      this.localApiKey = localApiKey.trim();
+    } else {
+      this.localApiKey = getStoredGeminiApiKey();
     }
-    this.ai = new GoogleGenAI({ apiKey: key });
-    if (model) this.primaryModel = model;
   }
 
-  updateConfig(apiKey: string, model: string) {
-    this.ai = new GoogleGenAI({ apiKey });
-    this.primaryModel = model;
+  private getEffectiveLocalKey(): string {
+    return (this.localApiKey || getStoredGeminiApiKey()).trim();
   }
 
-  private async raceWithAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
-    if (!signal) return promise;
-    if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+  static async checkServerStatus(localApiKey?: string): Promise<ServerGeminiStatus> {
+    const effectiveKey = (localApiKey ?? getStoredGeminiApiKey()).trim();
 
-    let listener: (() => void) | undefined;
-    const abortPromise = new Promise<never>((_, reject) => {
-      listener = () => reject(new DOMException("Aborted", "AbortError"));
-      signal.addEventListener('abort', listener, { once: true });
-    });
+    // Standalone APK / User Key Mode: verify directly against generativelanguage.googleapis.com
+    if (effectiveKey) {
+      try {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(effectiveKey)}`,
+          {
+            signal:
+              typeof AbortSignal !== "undefined" && AbortSignal.timeout
+                ? AbortSignal.timeout(9000)
+                : undefined,
+          }
+        );
+        if (res.ok) {
+          return {
+            connected: true,
+            defaultModel: PRIMARY_MODEL,
+            mode: "direct",
+          };
+        }
+        const errData = await res.json().catch(() => ({}));
+        return {
+          connected: false,
+          defaultModel: PRIMARY_MODEL,
+          mode: "direct",
+          error:
+            errData?.error?.message ||
+            `Direct Gemini API key check failed (HTTP ${res.status}).`,
+        };
+      } catch (err: any) {
+        return {
+          connected: false,
+          defaultModel: PRIMARY_MODEL,
+          mode: "direct",
+          error: err?.message || "Cannot reach generativelanguage.googleapis.com.",
+        };
+      }
+    }
 
+    // Shared Web App Mode: check server proxy
     try {
-      return await Promise.race([promise, abortPromise]);
-    } finally {
-      if (listener) signal.removeEventListener('abort', listener);
+      const res = await fetch("/api/gemini/status", {
+        signal:
+          typeof AbortSignal !== "undefined" && AbortSignal.timeout
+            ? AbortSignal.timeout(8000)
+            : undefined,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.connected) {
+        return {
+          connected: false,
+          defaultModel: data?.defaultModel || PRIMARY_MODEL,
+          mode: "server",
+          error:
+            data?.error ||
+            "No local Gemini API key saved and server returned unavailable. Add your Gemini API key in Menu > Language, Script & AI Engines.",
+        };
+      }
+      return {
+        connected: true,
+        defaultModel: data.defaultModel || PRIMARY_MODEL,
+        mode: "server",
+      };
+    } catch {
+      return {
+        connected: false,
+        defaultModel: PRIMARY_MODEL,
+        mode: "server",
+        error:
+          "Standalone mode: enter your Gemini API key in Menu > Language, Script & AI Engines to connect directly.",
+      };
     }
   }
 
   /**
-   * Robust wrapper for API calls with immediate abort support and fast 429/403 error escalation.
+   * Executes Gemini content generation directly using @google/genai SDK with a direct HTTPS REST fetch fallback.
+   * Zero dependency on window.aistudio or cookies so it executes natively in Capacitor Android APKs & all browsers.
    */
-  private async callWithRetry(
-    fn: (model: string) => Promise<any>,
-    retries = 2,
-    delay = 1500,
-    signal?: AbortSignal
-  ): Promise<any> {
-    let lastError: any;
-    let currentModel = this.primaryModel;
+  private async directGenerateContent(
+    apiKey: string,
+    model: string,
+    contents: string,
+    options: {
+      systemInstruction?: string;
+      responseMimeType?: string;
+      responseSchema?: any;
+      useGoogleSearch?: boolean;
+      signal?: AbortSignal;
+    } = {}
+  ): Promise<{ text: string; totalTokenCount?: number }> {
+    const resolvedModel = normalizeClientModel(model);
+    if (options.signal?.aborted) {
+      throw new DOMException("Aborted", "AbortError");
+    }
 
-    for (let i = 0; i < retries; i++) {
+    const handleDirectError = (err: any): never => {
+      if (options.signal?.aborted || err?.name === "AbortError") {
+        throw new DOMException("Aborted", "AbortError");
+      }
+      const msg = String(err?.message || err || "Gemini API error");
+      const wrapped = new Error(msg) as Error & {
+        isRateLimit?: boolean;
+        isQuotaExceeded?: boolean;
+        statusCode?: number;
+      };
+      if (/429|RESOURCE_EXHAUSTED|quota|rate limit|Too Many Requests/i.test(msg)) {
+        wrapped.isRateLimit = true;
+        wrapped.isQuotaExceeded = true;
+        wrapped.statusCode = 429;
+      } else if (/401|403|API_KEY_INVALID|permission/i.test(msg)) {
+        wrapped.statusCode = 403;
+      }
+      throw wrapped;
+    };
+
+    const runWithModel = async (targetModel: string): Promise<{ text: string; totalTokenCount?: number }> => {
+      // 1. Primary path: @google/genai SDK directly over HTTPS
+      try {
+        const ai = new GoogleGenAI({ apiKey });
+        const config: Record<string, any> = {};
+        if (options.systemInstruction) config.systemInstruction = options.systemInstruction;
+        if (options.responseMimeType) config.responseMimeType = options.responseMimeType;
+        if (options.responseSchema) config.responseSchema = options.responseSchema;
+        if (options.useGoogleSearch) config.tools = [{ googleSearch: {} }];
+
+        const response = await ai.models.generateContent({
+          model: targetModel,
+          contents,
+          config: Object.keys(config).length > 0 ? config : undefined,
+        });
+
+        const text = (response?.text || "").trim();
+        if (text) {
+          return {
+            text,
+            totalTokenCount: response?.usageMetadata?.totalTokenCount,
+          };
+        }
+      } catch (sdkErr: any) {
+        if (options.signal?.aborted || sdkErr?.name === "AbortError") {
+          throw sdkErr;
+        }
+        // Proceed to direct REST fetch fallback below (handles WebView/CORS edge cases)
+      }
+
+      // 2. Direct REST fetch fallback against generativelanguage.googleapis.com
+      const body: Record<string, any> = {
+        contents: [{ role: "user", parts: [{ text: contents }] }],
+      };
+      if (options.systemInstruction) {
+        body.systemInstruction = { parts: [{ text: options.systemInstruction }] };
+      }
+      const generationConfig: Record<string, any> = {};
+      if (options.responseMimeType) generationConfig.responseMimeType = options.responseMimeType;
+      if (Object.keys(generationConfig).length > 0) {
+        body.generationConfig = generationConfig;
+      }
+      if (options.useGoogleSearch) {
+        body.tools = [{ google_search: {} }];
+      }
+
+      const controller = new AbortController();
+      const onCallerAbort = () => controller.abort();
+      options.signal?.addEventListener("abort", onCallerAbort, { once: true });
+      const timeoutId = setTimeout(() => controller.abort(), 90000);
+
+      try {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+            targetModel
+          )}:generateContent?key=${encodeURIComponent(apiKey)}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+            signal: controller.signal,
+          }
+        );
+
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const errMsg = data?.error?.message || `Gemini HTTP ${res.status}`;
+          const restErr = new Error(errMsg) as Error & { statusCode?: number; isRateLimit?: boolean };
+          restErr.statusCode = res.status;
+          if (res.status === 429) restErr.isRateLimit = true;
+          throw restErr;
+        }
+
+        const parts = data?.candidates?.[0]?.content?.parts || [];
+        const text = parts
+          .map((p: any) => p?.text || "")
+          .join("")
+          .trim();
+
+        return {
+          text,
+          totalTokenCount: data?.usageMetadata?.totalTokenCount,
+        };
+      } finally {
+        clearTimeout(timeoutId);
+        options.signal?.removeEventListener("abort", onCallerAbort);
+      }
+    };
+
+    try {
+      return await runWithModel(resolvedModel);
+    } catch (primaryErr: any) {
+      if (
+        resolvedModel !== FALLBACK_MODEL &&
+        !options.signal?.aborted &&
+        !/API_KEY_INVALID/i.test(primaryErr?.message || "")
+      ) {
+        try {
+          return await runWithModel(FALLBACK_MODEL);
+        } catch (fallbackErr) {
+          return handleDirectError(fallbackErr);
+        }
+      }
+      return handleDirectError(primaryErr);
+    }
+  }
+
+  private async postJson<T>(
+    url: string,
+    payload: Record<string, any>,
+    signal?: AbortSignal
+  ): Promise<T> {
+    if (signal?.aborted) {
+      throw new DOMException("Aborted", "AbortError");
+    }
+
+    const controller = new AbortController();
+    let timedOut = false;
+    const onCallerAbort = () => controller.abort();
+    signal?.addEventListener("abort", onCallerAbort, { once: true });
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 120000);
+
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = data?.error || `HTTP ${res.status}`;
+        const err = new Error(msg) as Error & {
+          isRateLimit?: boolean;
+          isQuotaExceeded?: boolean;
+          statusCode?: number;
+        };
+        err.statusCode = res.status;
+        if (
+          res.status === 429 ||
+          data?.isRateLimit ||
+          /429|RESOURCE_EXHAUSTED|quota|rate limit|Too Many Requests/i.test(msg)
+        ) {
+          err.isRateLimit = true;
+          err.isQuotaExceeded = true;
+        }
+        throw err;
+      }
+
+      return data as T;
+    } catch (err: any) {
       if (signal?.aborted) {
         throw new DOMException("Aborted", "AbortError");
       }
-      try {
-        return await fn(currentModel);
-      } catch (err: any) {
-        lastError = err;
-        console.warn(`Gemini API attempt ${i + 1} with model ${currentModel} failed:`, err?.message);
-        
-        // Immediate check for abort
-        if (signal?.aborted || err?.name === 'AbortError') {
-          throw new DOMException("Aborted", "AbortError");
-        }
-
-        // Check for rate limiting / quota errors
-        const isRateLimit = /429|RESOURCE_EXHAUSTED|quota|rate limit|Too Many Requests|exceeded your current quota/i.test(err?.message || '');
-
-        // Hard Limit Auto-Halt: escalate 429 immediately without retry delay
-        if (isRateLimit) {
-          err.isRateLimit = true;
-          err.isQuotaExceeded = true;
-          throw err;
-        }
-
-        // Check for 403 / Model permission / Model not found error:
-        // Automatically switch to standard Flash model
-        const isModelAccessError = /403|PERMISSION_DENIED|not found|500|unsupported|unregistered callers/i.test(err?.message || '');
-        if (isModelAccessError && currentModel !== FALLBACK_MODEL) {
-          console.warn(`Access error on ${currentModel}. Auto-falling back to ${FALLBACK_MODEL}`);
-          currentModel = FALLBACK_MODEL;
-        }
-
-        if (i < retries - 1) {
-          const backoff = delay * Math.pow(1.5, i);
-          await new Promise<void>((resolve, reject) => {
-            if (signal?.aborted) return reject(new DOMException("Aborted", "AbortError"));
-            const t = setTimeout(resolve, backoff);
-            signal?.addEventListener('abort', () => {
-              clearTimeout(t);
-              reject(new DOMException("Aborted", "AbortError"));
-            }, { once: true });
-          });
-        }
+      if (timedOut) {
+        throw new Error("Server request timed out after 120s. Please try again.");
       }
+      if (err instanceof TypeError && /fetch|network/i.test(err.message)) {
+        throw new Error(
+          "No backend server reachable. Add your Gemini API key in Menu > Language, Script & AI Engines for standalone mode."
+        );
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeoutId);
+      signal?.removeEventListener("abort", onCallerAbort);
     }
-
-    // If 403 persists, provide clear guidance
-    if (/403|PERMISSION_DENIED/i.test(lastError?.message || '')) {
-      throw new Error(`403 Forbidden: API key lacks permission or model requires paid tier. Please check your Gemini API key in Settings or switch to Gemini 3 Flash.`);
-    }
-
-    throw new Error(`Gemini API failed after ${retries} attempts: ${lastError?.message || 'Unknown error'}`);
   }
 
   /**
-   * Generates context for the subtitles using web search and the content itself.
-   * Includes character analysis, genders, tones, and cultural optimization.
+   * Generates context for the subtitles using direct HTTPS Gemini (when key saved) or server proxy.
    */
   async generateContext(subtitles: string, signal?: AbortSignal): Promise<string> {
-    return this.callWithRetry(async (model) => {
-      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    const cleaned = stripFormatting(subtitles || "").trim();
+    if (!cleaned) {
+      throw new Error("No subtitle text found to analyze.");
+    }
 
-      const prompt = `
-        Perform a deep context analysis of the following subtitles for Urdu translation.
-        Use Google Search if names, titles, or specific events are mentioned to get accurate background.
-        
-        Your analysis MUST include:
-        1. CHARACTERS: List main characters, their roles, and CRITICAL: their GENDERS (Urdu grammar depends heavily on gender).
-        2. TONES & SCENARIOS: Identify if scenes are emotional, action-packed, aggressive, romantic, or comedic.
-        3. HUMOR & SARCASM: Specifically identify instances of humor or sarcasm.
-        4. CULTURAL OPTIMIZATION: Suggest how to adapt humor/sarcasm for target Urdu-speaking audiences (Pakistan/India) while maintaining the original soul.
-        5. RELATIONSHIPS: How characters address each other (formal vs informal).
-        
-        Subtitles Sample:
-        ${subtitles.slice(0, 8000)}
-      `;
+    const localKey = this.getEffectiveLocalKey();
+    if (localKey) {
+      const prompt = `Analyze these subtitle dialogue lines and provide a concise cultural localization context summary for a subtitle translator:
+1) Probable genre, tone, and setting
+2) Character names & likely gender/relationships/formality
+3) Slang, idioms, humor, or emotional beats to preserve
 
-      let response: GenerateContentResponse;
+Subtitles sample:
+${cleaned.slice(0, 7500)}`;
 
-      // Try with Google Search tool first; if 403 or unavailable, gracefully fall back to direct context
+      let res: { text: string; totalTokenCount?: number };
       try {
-        const genPromise = this.ai.models.generateContent({
-          model: model,
-          contents: prompt,
-          config: {
-            tools: [{ googleSearch: {} }],
-          },
+        res = await this.directGenerateContent(localKey, this.primaryModel, prompt, {
+          useGoogleSearch: true,
+          signal,
         });
-        response = await this.raceWithAbort(genPromise, signal);
-      } catch (searchErr: any) {
-        if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-        console.warn("Search grounding returned error/403, falling back to direct context generation:", searchErr?.message);
-        const fallbackGen = this.ai.models.generateContent({
-          model: model,
-          contents: prompt,
+      } catch {
+        res = await this.directGenerateContent(localKey, this.primaryModel, prompt, {
+          useGoogleSearch: false,
+          signal,
         });
-        response = await this.raceWithAbort(fallbackGen, signal);
       }
-
-      // Track quota tokens
-      const usage = response.usageMetadata;
-      const tokens = usage?.totalTokenCount || Math.round(prompt.length / 3.8 + (response.text?.length || 0) / 2);
+      const text = (res.text || "").trim();
+      if (!text) {
+        throw new Error("No context text was generated by the AI model. Please try again.");
+      }
+      const tokens =
+        res.totalTokenCount ||
+        Math.round(cleaned.slice(0, 8000).length / 3.8 + text.length / 2);
       quotaManager.recordRequest(tokens);
+      return text;
+    }
 
-      return response.text || "No context generated.";
-    }, 2, 2000, signal);
+    const data = await this.postJson<{
+      text?: string;
+      usageMetadata?: { totalTokenCount?: number };
+    }>(
+      "/api/gemini/context",
+      {
+        subtitles: cleaned,
+        model: this.primaryModel,
+      },
+      signal
+    );
+
+    const text = (data.text || "").trim();
+    if (!text || text === "No context generated.") {
+      throw new Error("No context text was generated by the AI model. Please try again.");
+    }
+
+    const tokens =
+      data.usageMetadata?.totalTokenCount ||
+      Math.round(cleaned.slice(0, 8000).length / 3.8 + text.length / 2);
+    quotaManager.recordRequest(tokens);
+
+    return text;
   }
 
   /**
@@ -177,69 +453,63 @@ export class GeminiService {
    */
   async generateCinemaInsights(
     title: string,
-    action: 'story' | 'plot' | 'review' | 'characters' | 'ending' | 'context' | 'all' = 'all',
-    language: 'ur' | 'en' | 'bilingual' = 'ur',
+    action: "story" | "plot" | "review" | "characters" | "ending" | "context" | "all" = "all",
+    language: "ur" | "en" | "bilingual" = "ur",
     signal?: AbortSignal
   ): Promise<string> {
-    return this.callWithRetry(async (model) => {
-      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    const localKey = this.getEffectiveLocalKey();
+    if (localKey) {
+      const langInstruction =
+        language === "ur"
+          ? "Write your entire response in natural, engaging Urdu (اردو رسم الخط)."
+          : language === "en"
+          ? "Write your response in clear English."
+          : "Provide bilingual sections in both Urdu and English.";
 
-      const langInstructions = language === 'ur'
-        ? "Respond in rich, natural, culturally resonant Urdu (اردو) using beautiful Nastaliq phrasing, with English character/actor names in parentheses where appropriate."
-        : language === 'en'
-        ? "Respond in fluent, articulate, engaging English with vivid storytelling and cinematic insight."
-        : "Provide a Bilingual response: For every major section, provide both English and Urdu (اردو) breakdown.";
+      const actionFocus =
+        action === "all"
+          ? "Complete breakdown: Story summary, plot beats, main characters & relationships, ending analysis, and audience review."
+          : `Focus deeply on: ${action}`;
 
-      let actionPrompt = "";
-      if (action === 'story') {
-        actionPrompt = "Focus on providing a simple, easy to understand story explanation (آسان کہانی اور خلاصہ) that anyone can grasp immediately, capturing the core emotional heart of the film/series.";
-      } else if (action === 'plot') {
-        actionPrompt = "Provide an in-depth, scene-by-scene / act-by-act plot breakdown (تفصیلی پلاٹ اور منظر بہ منظر وضاحت) covering Act 1 Setup, Act 2 Conflict & Escalation, Act 3 Climax, and Resolution.";
-      } else if (action === 'review') {
-        actionPrompt = "Generate a comprehensive cinematic review & critical analysis (جامع تنقیدی جائزہ اور ریٹنگز) covering direction, cinematography, performances, pacing, emotional impact, strengths, weaknesses, and a final rating out of 10.";
-      } else if (action === 'characters') {
-        actionPrompt = "Analyze all major characters, their psychology, motivations, relationships, and moral transformations throughout the narrative (کرداروں کا نفسیاتی تجزیہ اور تعلقات).";
-      } else if (action === 'ending') {
-        actionPrompt = "Explain the ending in full detail, resolving ambiguous plot points, explaining symbolic themes, hidden metaphors, and Easter eggs (اختتام کی تفصیلی تشریح اور پوشیدہ نکات).";
-      } else if (action === 'context') {
-        actionPrompt = "Provide a high-value Cultural & Dialogue Subtitle Context Aid (مکالمات اور ترجمہ کے لیے سیاق و سباق) explaining slang, period terminology, character gender nuances, and tone hints for subtitle localization.";
-      } else {
-        actionPrompt = "Provide a complete comprehensive cinema package: 1. Overview & Simple Story, 2. In-depth Plot Breakdown, 3. Character Arcs, 4. Critical Review & Rating (out of 10), 5. Ending Explanation, and 6. Subtitle Localization Notes.";
-      }
+      const prompt = `Movie/Series Title: "${title}"
+Task: ${actionFocus}
+${langInstruction}`;
 
-      const prompt = `You are an elite cinema scholar, film critic, and master storyteller with deep knowledge of global cinema and TV series.
-Movie / Series Query: "${title}"
-Goal: ${actionPrompt}
-Language Requirement: ${langInstructions}
-
-Use Google Search grounding to retrieve accurate release year, cast, director, awards, and verified plot points.
-Structure your response with clear, elegant markdown headers, bullet points, and highlight quotes.`;
-
-      let response: GenerateContentResponse;
       try {
-        const genPromise = this.ai.models.generateContent({
-          model,
-          contents: prompt,
-          config: {
-            tools: [{ googleSearch: {} }],
-          },
+        const res = await this.directGenerateContent(localKey, this.primaryModel, prompt, {
+          useGoogleSearch: true,
+          signal,
         });
-        response = await this.raceWithAbort(genPromise, signal);
-      } catch (searchErr: any) {
-        if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-        const fallbackGen = this.ai.models.generateContent({
-          model,
-          contents: prompt,
+        if (res.text) return res.text;
+      } catch {
+        const res = await this.directGenerateContent(localKey, this.primaryModel, prompt, {
+          useGoogleSearch: false,
+          signal,
         });
-        response = await this.raceWithAbort(fallbackGen, signal);
+        if (res.text) return res.text;
       }
+      return "No cinema insight generated.";
+    }
 
-      return response.text || "No cinema insight generated.";
-    }, 2, 2000, signal);
+    const data = await this.postJson<{
+      text?: string;
+      usageMetadata?: { totalTokenCount?: number };
+    }>(
+      "/api/gemini/cinema",
+      {
+        title,
+        action,
+        language,
+        model: this.primaryModel,
+      },
+      signal
+    );
+
+    return data.text || "No cinema insight generated.";
   }
 
   /**
-   * Translates a batch of subtitle texts based on translation settings.
+   * Translates a batch of subtitle texts directly via HTTPS (when local key exists) or server proxy.
    */
   async translateBatch(
     items: { index: number; text: string }[],
@@ -248,26 +518,163 @@ Structure your response with clear, elegant markdown headers, bullet points, and
     signal?: AbortSignal,
     settings?: TranslationSettings
   ): Promise<TranslationResult[]> {
-    return this.callWithRetry(async (model) => {
-      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    const cleanItems = items.map((item) => ({
+      index: item.index,
+      text: stripFormatting(item.text),
+    }));
 
-      // Strip formatting data or gradient codes before translation so the AI receives readable plain text
-      const cleanItems = items.map(item => ({
-        index: item.index,
-        text: stripFormatting(item.text)
-      }));
-
+    const localKey = this.getEffectiveLocalKey();
+    if (localKey) {
+      const activeSettings = settings || DEFAULT_TRANSLATION_SETTINGS;
       const systemInstruction = buildTranslationSystemInstruction(
-        settings || DEFAULT_TRANSLATION_SETTINGS,
+        activeSettings,
         context,
         customPrompt
       );
+      const userPrompt = `Translate every subtitle item below and return a JSON array of objects with exact "index" (number) and "translatedText" (string).\nItems:\n${JSON.stringify(
+        cleanItems
+      )}`;
 
-      const genPromise = this.ai.models.generateContent({
-        model: model,
-        contents: JSON.stringify(cleanItems),
-        config: {
-          systemInstruction,
+      const res = await this.directGenerateContent(localKey, this.primaryModel, userPrompt, {
+        systemInstruction,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              index: { type: Type.INTEGER },
+              translatedText: { type: Type.STRING },
+            },
+            required: ["index", "translatedText"],
+          },
+        },
+        signal,
+      });
+
+      let parsed: TranslationResult[] = [];
+      try {
+        const cleanedJson = res.text
+          .replace(/^```json\s*/i, "")
+          .replace(/```$/i, "")
+          .trim();
+        const rawArr = JSON.parse(cleanedJson);
+        if (Array.isArray(rawArr)) {
+          parsed = rawArr
+            .filter((r) => typeof r?.index === "number" && typeof r?.translatedText === "string")
+            .map((r) => ({ index: r.index, translatedText: r.translatedText.trim() }));
+        }
+      } catch {
+        parsed = [];
+      }
+
+      const tokens =
+        res.totalTokenCount ||
+        Math.round(
+          JSON.stringify(cleanItems).length / 3.8 + JSON.stringify(parsed).length / 2
+        );
+      quotaManager.recordRequest(tokens);
+      return parsed;
+    }
+
+    const data = await this.postJson<{
+      results?: TranslationResult[];
+      usageMetadata?: { totalTokenCount?: number };
+    }>(
+      "/api/gemini/translate-batch",
+      {
+        items: cleanItems,
+        context,
+        customPrompt,
+        settings: settings || DEFAULT_TRANSLATION_SETTINGS,
+        model: this.primaryModel,
+      },
+      signal
+    );
+
+    const results = Array.isArray(data.results) ? data.results : [];
+    const tokens =
+      data.usageMetadata?.totalTokenCount ||
+      Math.round(
+        JSON.stringify(items).length / 3.8 + JSON.stringify(results).length / 2
+      );
+    quotaManager.recordRequest(tokens);
+
+    return results;
+  }
+
+  /**
+   * Provides a "neutral" translation for comparison (simulating Google Translate style).
+   */
+  async getNeutralTranslation(
+    text: string,
+    signal?: AbortSignal,
+    settings?: TranslationSettings
+  ): Promise<string> {
+    const cleanText = stripFormatting(text);
+    const localKey = this.getEffectiveLocalKey();
+
+    if (localKey) {
+      const activeSettings = settings || DEFAULT_TRANSLATION_SETTINGS;
+      const targetLangName =
+        TARGET_LANGUAGES.find((l) => l.code === activeSettings.targetLanguage)?.name ||
+        "Urdu";
+      const scriptNote =
+        activeSettings.scriptMode === "roman-urdu"
+          ? "using Roman Urdu Latin script"
+          : "using native script";
+      const res = await this.directGenerateContent(
+        localKey,
+        FALLBACK_MODEL,
+        `Translate neutrally and literally into ${targetLangName} (${scriptNote}). Return only the translated text:\n\n${cleanText}`,
+        { signal }
+      );
+      return res.text.trim();
+    }
+
+    const data = await this.postJson<{ text?: string }>(
+      "/api/gemini/neutral",
+      {
+        text: cleanText,
+        settings: settings || DEFAULT_TRANSLATION_SETTINGS,
+      },
+      signal
+    );
+
+    return data.text?.trim() || "";
+  }
+
+  /**
+   * Translates a batch neutrally via local key (when present) or server proxy.
+   */
+  async translateBatchNeutral(
+    items: { index: number; text: string }[],
+    _googleApiKey?: string,
+    signal?: AbortSignal,
+    settings?: TranslationSettings
+  ): Promise<{ index: number; googleTranslateText: string }[]> {
+    const cleanItems = items.map((item) => ({
+      index: item.index,
+      text: stripFormatting(item.text),
+    }));
+
+    const localKey = this.getEffectiveLocalKey();
+    if (localKey) {
+      const activeSettings = settings || DEFAULT_TRANSLATION_SETTINGS;
+      const targetLangName =
+        TARGET_LANGUAGES.find((l) => l.code === activeSettings.targetLanguage)?.name ||
+        "Urdu";
+      const scriptNote =
+        activeSettings.scriptMode === "roman-urdu"
+          ? "in Roman Urdu (Latin script)"
+          : "in native script";
+      const res = await this.directGenerateContent(
+        localKey,
+        FALLBACK_MODEL,
+        `Translate each subtitle text faithfully and neutrally into ${targetLangName} ${scriptNote}. Return JSON array of {index, googleTranslateText}:\n${JSON.stringify(
+          cleanItems
+        )}`,
+        {
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.ARRAY,
@@ -275,188 +682,98 @@ Structure your response with clear, elegant markdown headers, bullet points, and
               type: Type.OBJECT,
               properties: {
                 index: { type: Type.INTEGER },
-                translatedText: { type: Type.STRING },
+                googleTranslateText: { type: Type.STRING },
               },
-              required: ["index", "translatedText"],
+              required: ["index", "googleTranslateText"],
             },
           },
-        },
-      });
-
-      let response: GenerateContentResponse;
-      if (signal) {
-        let abortListener: (() => void) | undefined;
-        const abortPromise = new Promise<never>((_, reject) => {
-          if (signal.aborted) return reject(new DOMException("Aborted", "AbortError"));
-          abortListener = () => reject(new DOMException("Aborted", "AbortError"));
-          signal.addEventListener('abort', abortListener, { once: true });
-        });
-        try {
-          response = await Promise.race([genPromise, abortPromise]);
-        } finally {
-          if (abortListener) signal.removeEventListener('abort', abortListener);
+          signal,
         }
-      } else {
-        response = await genPromise;
-      }
-
-      // Track quota tokens
-      const usage = response.usageMetadata;
-      const tokens = usage?.totalTokenCount || Math.round(JSON.stringify(items).length / 3.8 + (response.text?.length || 0) / 2);
-      quotaManager.recordRequest(tokens);
+      );
 
       try {
-        const text = response.text || "[]";
-        // Clean up text in case model wraps it in markdown code blocks
-        const cleanedText = text.replace(/```json\n?|```/g, "").trim();
-        const parsed = JSON.parse(cleanedText);
-        
-        if (Array.isArray(parsed)) {
-          return parsed.map(item => ({
-            index: Number(item.index),
-            translatedText: String(item.translatedText || "")
+        const cleanedJson = res.text
+          .replace(/^```json\s*/i, "")
+          .replace(/```$/i, "")
+          .trim();
+        const arr = JSON.parse(cleanedJson);
+        if (Array.isArray(arr)) {
+          return arr.map((r: any) => ({
+            index: Number(r.index),
+            googleTranslateText: String(r.googleTranslateText || ""),
           }));
         }
-        
-        // If it's not an array, try to find an array inside it
-        if (typeof parsed === 'object' && parsed !== null) {
-          const possibleArray = Object.values(parsed).find(v => Array.isArray(v));
-          if (possibleArray) {
-             return (possibleArray as any[]).map(item => ({
-              index: Number(item.index),
-              translatedText: String(item.translatedText || "")
-            }));
-          }
-        }
-        
-        throw new Error("Response is not a valid translation array");
-      } catch (e) {
-        console.error("Failed to parse Gemini response", e);
-        // Fallback: try to extract JSON from text if it's wrapped in markdown
-        const match = response.text?.match(/\[[\s\S]*\]/);
-        if (match) {
-          const parsed = JSON.parse(match[0]);
-          return parsed.map((item: any) => ({
-            index: Number(item.index),
-            translatedText: String(item.translatedText || "")
-          }));
-        }
-        throw new Error("Invalid JSON response from model: " + response.text?.slice(0, 100));
+      } catch {
+        return [];
       }
-    }, 2, 1500, signal);
-  }
+      return [];
+    }
 
-  /**
-   * Provides a "neutral" translation for comparison (simulating Google Translate style).
-   */
-  async getNeutralTranslation(text: string, signal?: AbortSignal, settings?: TranslationSettings): Promise<string> {
-    const cleanText = stripFormatting(text);
-    return this.callWithRetry(async (model) => {
-      let promptInstruction = `Translate the following text to Urdu literally and neutrally, like a standard machine translation: "${cleanText}"`;
-      
-      const langObj = TARGET_LANGUAGES.find(l => l.code === settings?.targetLanguage);
-      const langName = langObj ? langObj.name : 'Urdu';
-
-      if (settings?.scriptMode === 'roman-urdu') {
-        promptInstruction = `Translate the following dialogue into standard phonetic Roman Urdu (Latin English alphabet, e.g. "Aap yahan kya kar rahe hain?"). Output ONLY the Roman Urdu translation without quotes: "${cleanText}"`;
-      } else if (settings?.scriptMode === 'bilingual-en-ur') {
-        promptInstruction = `Provide a bilingual subtitle (Line 1: Original English, Line 2: Literal Urdu script translation). Output exactly those 2 lines separated by a newline: "${cleanText}"`;
-      } else if (settings?.scriptMode === 'bilingual-en-roman') {
-        promptInstruction = `Provide a bilingual subtitle (Line 1: Original English, Line 2: Phonetic Roman Urdu). Output exactly those 2 lines separated by a newline: "${cleanText}"`;
-      } else if (settings?.scriptMode === 'bilingual-ur-roman') {
-        promptInstruction = `Provide a bilingual subtitle (Line 1: Authentic Urdu script translation, Line 2: Phonetic Roman Urdu pronunciation). Output exactly those 2 lines separated by a newline: "${cleanText}"`;
-      } else if (settings?.scriptMode === 'bilingual-ur-en') {
-        promptInstruction = `Provide a bilingual subtitle (Line 1: Authentic Urdu script translation, Line 2: Original English dialogue). Output exactly those 2 lines separated by a newline: "${cleanText}"`;
-      } else if (settings?.scriptMode === 'bilingual-side-by-side') {
-        promptInstruction = `Provide a single-line inline bilingual subtitle: "${cleanText} (Urdu translation)". Output on 1 line: "${cleanText}"`;
-      } else if (settings?.targetLanguage && settings.targetLanguage !== 'ur' && settings.targetLanguage !== 'ur-roman') {
-        promptInstruction = `Translate the following text to ${langName} literally and neutrally: "${cleanText}"`;
-      }
-
-      const genPromise = this.ai.models.generateContent({
-        model: FALLBACK_MODEL, // Always use flash for neutral comparison for speed
-        contents: promptInstruction,
-      });
-
-      let response: GenerateContentResponse;
-      if (signal) {
-        let abortListener: (() => void) | undefined;
-        const abortPromise = new Promise<never>((_, reject) => {
-          if (signal.aborted) return reject(new DOMException("Aborted", "AbortError"));
-          abortListener = () => reject(new DOMException("Aborted", "AbortError"));
-          signal.addEventListener('abort', abortListener, { once: true });
-        });
-        try {
-          response = await Promise.race([genPromise, abortPromise]);
-        } finally {
-          if (abortListener) signal.removeEventListener('abort', abortListener);
-        }
-      } else {
-        response = await genPromise;
-      }
-
-      return response.text?.trim() || "";
-    }, 2, 1500, signal);
-  }
-
-  /**
-   * Translates a batch neutrally (Gemini Flash fast machine translation without 403 blocks).
-   */
-  async translateBatchNeutral(
-    items: { index: number; text: string }[],
-    googleApiKey?: string,
-    signal?: AbortSignal,
-    settings?: TranslationSettings
-  ): Promise<{ index: number; googleTranslateText: string }[]> {
-    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-    // Direct Gemini Flash neutral translation
-    const results = await Promise.all(
-      items.map(async (item) => ({
-        index: item.index,
-        googleTranslateText: await this.getNeutralTranslation(item.text, signal, settings),
-      }))
+    const data = await this.postJson<{
+      results?: { index: number; googleTranslateText: string }[];
+    }>(
+      "/api/gemini/neutral-batch",
+      {
+        items: cleanItems,
+        settings: settings || DEFAULT_TRANSLATION_SETTINGS,
+      },
+      signal
     );
-    return results;
+
+    return Array.isArray(data.results) ? data.results : [];
   }
 }
 
 /**
- * High-speed batched Google / Machine Translation with abort signal support and automatic Gemini neutral fallback
+ * High-speed batched Google / Machine Translation with routing mode ('hybrid' | 'web' | 'cloud'), abort signal & Gemini fallback.
  */
 export async function translateBatchGoogle(
   items: { index: number; text: string }[],
   apiKey?: string,
   signal?: AbortSignal,
   geminiFallback?: GeminiService,
-  settings?: TranslationSettings
-): Promise<{ index: number; googleTranslateText: string; isFallback?: boolean; error403?: boolean }[]> {
+  settings?: TranslationSettings,
+  routingMode: GoogleRoutingMode = "hybrid"
+): Promise<
+  { index: number; googleTranslateText: string; isFallback?: boolean; error403?: boolean }[]
+> {
   if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
-  // Strip formatting/gradient codes before sending to Google Translate
-  const cleanItems = items.map(item => ({
+  const cleanItems = items.map((item) => ({
     index: item.index,
-    text: stripFormatting(item.text)
+    text: stripFormatting(item.text),
   }));
 
   let got403 = false;
-  const sourceCode = (settings?.sourceLanguage && settings.sourceLanguage !== 'auto') ? settings.sourceLanguage : 'auto';
-  const targetCode = settings?.targetLanguage === 'ur-roman' ? 'ur' : (settings?.targetLanguage || 'ur');
+  const sourceCode =
+    settings?.sourceLanguage && settings.sourceLanguage !== "auto"
+      ? settings.sourceLanguage
+      : "auto";
+  const targetCode =
+    settings?.targetLanguage === "ur-roman"
+      ? "ur"
+      : settings?.targetLanguage || "ur";
 
-  if (apiKey) {
-    // Official API supports batching via multiple 'q' parameters
+  const tryCloud = Boolean(apiKey && routingMode !== "web");
+  const tryWeb = routingMode !== "cloud";
+
+  if (tryCloud && apiKey) {
     try {
       const params = new URLSearchParams();
-      params.append('key', apiKey);
-      if (sourceCode !== 'auto') params.append('source', sourceCode);
-      params.append('target', targetCode);
-      params.append('format', 'text');
-      cleanItems.forEach(item => params.append('q', item.text));
+      params.append("key", apiKey);
+      if (sourceCode !== "auto") params.append("source", sourceCode);
+      params.append("target", targetCode);
+      params.append("format", "text");
+      cleanItems.forEach((item) => params.append("q", item.text));
 
-      const response = await fetch(`https://translation.googleapis.com/language/translate/v2`, {
-        method: 'POST',
-        body: params,
-        signal: signal || AbortSignal.timeout(10000)
-      });
+      const response = await fetch(
+        `https://translation.googleapis.com/language/translate/v2`,
+        {
+          method: "POST",
+          body: params,
+          signal: signal || AbortSignal.timeout(10000),
+        }
+      );
 
       if (response.status === 403) {
         got403 = true;
@@ -466,39 +783,52 @@ export async function translateBatchGoogle(
         if (data.data?.translations) {
           return cleanItems.map((item, i) => ({
             index: item.index,
-            googleTranslateText: data.data.translations[i].translatedText
+            googleTranslateText: data.data.translations[i].translatedText,
           }));
         }
-        if (data.error?.code === 403 || /forbidden|permission|key/i.test(data.error?.message || '')) {
+        if (
+          data.error?.code === 403 ||
+          /forbidden|permission|key/i.test(data.error?.message || "")
+        ) {
           got403 = true;
         }
       }
     } catch (e: any) {
       if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-      if (e?.status === 403 || /403/i.test(e?.message || '')) got403 = true;
+      if (e?.status === 403 || /403/i.test(e?.message || "")) got403 = true;
       console.error("Batched Google Cloud API failed:", e);
     }
   }
 
   // Free Google Translate endpoint (gtx)
-  if (!got403) {
+  if (tryWeb && !got403) {
     try {
       const separator = " [|] ";
-      const combinedText = cleanItems.map(item => item.text).join(separator);
-      const translatedCombined = await translateTextGoogle(combinedText, undefined, signal, settings);
-      
-      if (translatedCombined && translatedCombined !== "Translation Error" && !translatedCombined.startsWith("403")) {
+      const combinedText = cleanItems.map((item) => item.text).join(separator);
+      const translatedCombined = await translateTextGoogle(
+        combinedText,
+        undefined,
+        signal,
+        settings,
+        "web"
+      );
+
+      if (
+        translatedCombined &&
+        translatedCombined !== "Translation Error" &&
+        !translatedCombined.startsWith("403")
+      ) {
         const parts = translatedCombined.split(/ \s*\[\s*\|\s*\]\s* /);
         if (parts.length === cleanItems.length) {
           return cleanItems.map((item, i) => ({
             index: item.index,
-            googleTranslateText: parts[i].trim()
+            googleTranslateText: parts[i].trim(),
           }));
         }
       }
     } catch (e: any) {
       if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-      if (e?.status === 403 || /403/i.test(e?.message || '')) got403 = true;
+      if (e?.status === 403 || /403/i.test(e?.message || "")) got403 = true;
     }
 
     // Try parallel individual requests
@@ -506,29 +836,42 @@ export async function translateBatchGoogle(
       const results = await Promise.all(
         cleanItems.map(async (item) => ({
           index: item.index,
-          googleTranslateText: await translateTextGoogle(item.text, apiKey, signal, settings),
+          googleTranslateText: await translateTextGoogle(
+            item.text,
+            routingMode === "hybrid" ? apiKey : undefined,
+            signal,
+            settings,
+            routingMode
+          ),
         }))
       );
 
-      const hasValid = results.some(r => r.googleTranslateText && r.googleTranslateText !== "Translation Error");
+      const hasValid = results.some(
+        (r) => r.googleTranslateText && r.googleTranslateText !== "Translation Error"
+      );
       if (hasValid) {
         return results;
       }
     } catch (e: any) {
       if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-      if (e?.status === 403 || /403/i.test(e?.message || '')) got403 = true;
+      if (e?.status === 403 || /403/i.test(e?.message || "")) got403 = true;
     }
   }
 
-  // Seamless Fallback: Gemini Neutral Machine Translation (Guarantees no 403 block and instantaneous response)
+  // Seamless Fallback: Gemini Neutral Machine Translation
   if (geminiFallback) {
     try {
-      const fallbackResults = await geminiFallback.translateBatchNeutral(cleanItems, undefined, signal, settings);
-      return fallbackResults.map(r => ({
+      const fallbackResults = await geminiFallback.translateBatchNeutral(
+        cleanItems,
+        undefined,
+        signal,
+        settings
+      );
+      return fallbackResults.map((r) => ({
         index: r.index,
         googleTranslateText: r.googleTranslateText,
         isFallback: true,
-        error403: got403
+        error403: got403,
       }));
     } catch (fbErr) {
       if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
@@ -536,33 +879,39 @@ export async function translateBatchGoogle(
     }
   }
 
-  // Last resort: return error markers
-  return cleanItems.map(item => ({
+  return cleanItems.map((item) => ({
     index: item.index,
-    googleTranslateText: got403 ? "Google 403 (Check API Key)" : "Translation Error",
-    error403: got403
+    googleTranslateText: got403
+      ? "Google 403 (Check API Key)"
+      : "Translation Error",
+    error403: got403,
   }));
 }
 
 /**
- * Standalone Google Translate implementation with abort signal support.
+ * Standalone Google Translate implementation with routingMode & abort signal support.
  */
 export async function translateTextGoogle(
-  text: string, 
-  apiKey?: string, 
+  text: string,
+  apiKey?: string,
   signal?: AbortSignal,
-  settings?: TranslationSettings
+  settings?: TranslationSettings,
+  routingMode: GoogleRoutingMode = "hybrid"
 ): Promise<string> {
   if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
-  // Strip formatting/gradient codes before sending to Google Translate
   const cleanText = stripFormatting(text);
 
-  const sourceCode = (settings?.sourceLanguage && settings.sourceLanguage !== 'auto') ? settings.sourceLanguage : 'auto';
-  const targetCode = settings?.targetLanguage === 'ur-roman' ? 'ur' : (settings?.targetLanguage || 'ur');
+  const sourceCode =
+    settings?.sourceLanguage && settings.sourceLanguage !== "auto"
+      ? settings.sourceLanguage
+      : "auto";
+  const targetCode =
+    settings?.targetLanguage === "ur-roman"
+      ? "ur"
+      : settings?.targetLanguage || "ur";
 
-  // 1. Try Google Cloud Translation API if key is provided
-  if (apiKey) {
+  if (apiKey && routingMode !== "web") {
     try {
       const response = await fetch(
         `https://translation.googleapis.com/language/translate/v2?key=${apiKey}`,
@@ -572,35 +921,48 @@ export async function translateTextGoogle(
           signal: signal || AbortSignal.timeout(10000),
           body: JSON.stringify({
             q: cleanText,
-            source: sourceCode !== 'auto' ? sourceCode : undefined,
+            source: sourceCode !== "auto" ? sourceCode : undefined,
             target: targetCode,
             format: "text",
           }),
         }
       );
       if (response.status === 403) {
-        throw new Error("403 Forbidden: Google Cloud Translation API key invalid or lacks permissions.");
+        throw new Error(
+          "403 Forbidden: Google Cloud Translation API key invalid or lacks permissions."
+        );
       }
       const data = await response.json();
       if (data.data?.translations?.[0]?.translatedText) {
         return data.data.translations[0].translatedText;
       }
       if (data.error) {
-        if (data.error.code === 403) throw new Error("403 Forbidden: " + data.error.message);
+        if (data.error.code === 403)
+          throw new Error("403 Forbidden: " + data.error.message);
         console.error("Google Cloud API Error:", data.error.message);
       }
     } catch (e) {
       if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
       console.error("Google Cloud Translate API failed:", e);
-      throw e;
+      if (routingMode === "cloud") throw e;
     }
   }
-  
-  // 2. Fallback to Built-in/Free Google Translate API
+
+  if (routingMode === "cloud") {
+    throw new Error("Cloud-Only mode selected, but no valid Google Cloud API key is set.");
+  }
+
   try {
-    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${encodeURIComponent(sourceCode)}&tl=${encodeURIComponent(targetCode)}&dt=t&q=${encodeURIComponent(cleanText)}`;
-    const response = await fetch(url, { signal: signal || AbortSignal.timeout(9000) });
-    if (response.status === 403) throw new Error("403 Forbidden on public endpoint");
+    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${encodeURIComponent(
+      sourceCode
+    )}&tl=${encodeURIComponent(targetCode)}&dt=t&q=${encodeURIComponent(
+      cleanText
+    )}`;
+    const response = await fetch(url, {
+      signal: signal || AbortSignal.timeout(9000),
+    });
+    if (response.status === 403)
+      throw new Error("403 Forbidden on public endpoint");
     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
     const data = await response.json();
     if (data && data[0] && data[0][0] && data[0][0][0]) {
@@ -614,4 +976,3 @@ export async function translateTextGoogle(
 
   return "Translation Error";
 }
-

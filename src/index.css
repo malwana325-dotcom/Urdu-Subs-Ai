@@ -9,16 +9,67 @@
 }
 
 @theme {
-  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-sans: var(--ui-font, "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
   --font-urdu: "Noto Nastaliq Urdu", "Gulzar", "Jameel Noori Nastaliq", "Noto Sans Arabic", "Urdu Typesetting", "PakType Tehreer", "Segoe UI Historic", serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
-  --color-zinc-850: #1c1c20;
+  --color-zinc-850: #181b22;
+}
+
+/* ==========================================================================
+   App-Wide UI Zoom (50% - 200%), Density & Studio Design Tokens
+   ========================================================================== */
+:root {
+  --ui-zoom: 1;
+  --ui-font: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --container-pad: 0.75rem;
+  --card-pad: 0.75rem;
+  --card-gap: 0.5rem;
+
+  /* Default: Crisp Neutral Studio (Light) with Single Studio Teal Accent */
+  --theme-canvas: #f8fafc;
+  --theme-surface: #ffffff;
+  --theme-elevated: #f1f5f9;
+  --theme-border: #e2e8f0;
+  --theme-text: #0f172a;
+  --theme-muted: #64748b;
+  --theme-accent: #0d9488;
+  --theme-accent-soft: rgba(13, 148, 136, 0.10);
+  --theme-accent-text: #0f766e;
+  --theme-header: rgba(255, 255, 255, 0.92);
+}
+
+html {
+  font-size: calc(15px * var(--ui-zoom, 1));
+  font-family: var(--ui-font, "Plus Jakarta Sans", sans-serif);
+  -webkit-text-size-adjust: 100%;
+  overflow-x: clip;
+  max-width: 100%;
+}
+
+body,
+#root {
+  font-family: var(--ui-font, "Plus Jakarta Sans", sans-serif);
+  overflow-x: clip;
+  max-width: 100%;
+  min-height: 100%;
+  -webkit-overflow-scrolling: touch;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Keep fixed/sticky chrome compact regardless of zoom level on mobile */
+.mobile-fixed-chrome {
+  font-size: 14px;
+}
+
+/* Toggleable Contextual Info Icons */
+:root[data-hide-info-guides="true"] .info-popover-trigger {
+  display: none !important;
 }
 
 /* Ensure Urdu text has adequate line-height for Nastaliq ascenders/descenders */
 .font-urdu {
   font-family: var(--urdu-font, 'Noto Nastaliq Urdu', serif);
-  line-height: 2.2;
+  line-height: 2.15;
   direction: rtl;
   text-align: right;
 }
@@ -32,16 +83,89 @@
     scrollbar-width: none;
   }
 
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .touch-tactile {
+    transition: transform 150ms cubic-bezier(0.2, 0, 0, 1),
+      opacity 150ms cubic-bezier(0.2, 0, 0, 1),
+      background-color 150ms cubic-bezier(0.2, 0, 0, 1),
+      border-color 150ms cubic-bezier(0.2, 0, 0, 1);
+  }
+  .touch-tactile:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+
+  /* Cap oversized horizontal action buttons to 1 inch (96px) */
+  .btn-inch-cap {
+    max-width: 96px;
+    overflow: hidden;
+  }
+
+  /* Prevent blurred modal/popup backdrops from leaking touch or scroll events */
+  .backdrop-touch-lock,
+  [class*="backdrop-blur"].fixed.inset-0 {
+    touch-action: none;
+    overscroll-behavior: contain;
+  }
+
+  /* 3-line vertical ceiling with in-box scrolling that chains cleanly to Workspace scroll */
+  .ws-2line-clamp {
+    line-height: 1.55;
+    max-height: calc(1.55em * 3 + 4px);
+    overflow-y: auto;
+    overflow-x: auto;
+    overscroll-behavior: auto;
+    touch-action: pan-x pan-y;
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+  }
+
   /* Android & Mobile Safe Area Inset Support */
   .pt-safe {
     padding-top: max(env(safe-area-inset-top, 0px), 0px);
   }
   .pb-safe {
-    padding-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
+    padding-bottom: max(env(safe-area-inset-bottom, 0px), 6px);
   }
   .h-safe-screen {
     height: 100vh;
     height: 100dvh;
+  }
+
+  /* Hardware-accelerated off-screen skip for fast Android scrolling */
+  .perf-row {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 120px;
+  }
+
+  /* Theme Semantic Helpers */
+  .themed-canvas {
+    background-color: var(--theme-canvas);
+    color: var(--theme-text);
+  }
+  .themed-surface {
+    background-color: var(--theme-surface);
+    border-color: var(--theme-border);
+  }
+  .themed-elevated {
+    background-color: var(--theme-elevated);
+    border-color: var(--theme-border);
+  }
+  .themed-border {
+    border-color: var(--theme-border);
+  }
+  .themed-muted {
+    color: var(--theme-muted);
+  }
+  .themed-accent-bg {
+    background-color: var(--theme-accent);
+    color: #ffffff;
+  }
+  .themed-accent-soft {
+    background-color: var(--theme-accent-soft);
+    color: var(--theme-accent-text);
   }
 
   /* Subtitle Animation Effects */
@@ -119,85 +243,149 @@
 }
 
 /* ==========================================================================
-   App Themes & Enhanced Visual Styles
+   Unified Minimalist Studio Themes (6 Harmonized Palettes)
    ========================================================================== */
 
+/* 1. Crisp Neutral Studio (Light) */
+[data-app-theme="classic"] {
+  --theme-canvas: #f8fafc;
+  --theme-surface: #ffffff;
+  --theme-elevated: #f1f5f9;
+  --theme-border: #e2e8f0;
+  --theme-text: #0f172a;
+  --theme-muted: #64748b;
+  --theme-accent: #0d9488;
+  --theme-accent-soft: rgba(13, 148, 136, 0.10);
+  --theme-accent-text: #0f766e;
+  --theme-header: rgba(255, 255, 255, 0.92);
+}
+
+/* 2. Deep Obsidian Cinema (Dark-First Flagship) */
+[data-app-theme="cinematic"] {
+  --theme-canvas: #090a0d;
+  --theme-surface: #111318;
+  --theme-elevated: #181b22;
+  --theme-border: #222631;
+  --theme-text: #f1f5f9;
+  --theme-muted: #94a3b8;
+  --theme-accent: #14b8a6;
+  --theme-accent-soft: rgba(20, 184, 166, 0.13);
+  --theme-accent-text: #2dd4bf;
+  --theme-header: rgba(9, 10, 13, 0.92);
+}
+
+/* 3. Cyber Cyan (Refined Dark) */
 [data-app-theme="cyber"] {
-  --theme-accent: #00f0ff;
-  --theme-accent-glow: 0 0 14px rgba(0, 240, 255, 0.45);
+  --theme-canvas: #07090e;
+  --theme-surface: #0d111a;
+  --theme-elevated: #141a26;
+  --theme-border: rgba(34, 211, 238, 0.20);
+  --theme-text: #ecfeff;
+  --theme-muted: #94a3b8;
+  --theme-accent: #06b6d4;
+  --theme-accent-soft: rgba(6, 182, 212, 0.14);
+  --theme-accent-text: #22d3ee;
+  --theme-header: rgba(7, 9, 14, 0.94);
 }
 
-[data-app-theme="cyber"] body,
-[data-app-theme="cyber"] .theme-root {
-  background-color: #07070e !important;
-}
-
-[data-app-theme="cyber"] header {
-  background-color: rgba(10, 11, 22, 0.95) !important;
-  border-bottom-color: rgba(0, 240, 255, 0.28) !important;
-  box-shadow: 0 4px 24px rgba(0, 240, 255, 0.08);
-}
-
+/* 4. Synthwave Dusk (Refined Violet-Rose) */
 [data-app-theme="neon"] {
+  --theme-canvas: #0c0916;
+  --theme-surface: #141024;
+  --theme-elevated: #1c1732;
+  --theme-border: rgba(244, 114, 182, 0.20);
+  --theme-text: #fdf2f8;
+  --theme-muted: #a79bc2;
   --theme-accent: #ec4899;
-  --theme-accent-glow: 0 0 16px rgba(236, 72, 153, 0.5);
+  --theme-accent-soft: rgba(236, 72, 153, 0.14);
+  --theme-accent-text: #f472b6;
+  --theme-header: rgba(12, 9, 22, 0.94);
 }
 
-[data-app-theme="neon"] body,
-[data-app-theme="neon"] .theme-root {
-  background-color: #0c0a1e !important;
+/* 5. Midnight Sapphire (Oceanic Slate) */
+[data-app-theme="sapphire"] {
+  --theme-canvas: #070e1b;
+  --theme-surface: #0d1729;
+  --theme-elevated: #132139;
+  --theme-border: rgba(56, 189, 248, 0.20);
+  --theme-text: #f0f9ff;
+  --theme-muted: #94a9c9;
+  --theme-accent: #0ea5e9;
+  --theme-accent-soft: rgba(14, 165, 233, 0.14);
+  --theme-accent-text: #38bdf8;
+  --theme-header: rgba(7, 14, 27, 0.94);
 }
 
-[data-app-theme="neon"] header {
-  background-color: rgba(15, 12, 34, 0.95) !important;
-  border-bottom-color: rgba(236, 72, 153, 0.28) !important;
-  box-shadow: 0 4px 24px rgba(236, 72, 153, 0.08);
+/* 6. Warm Amber Cinema (Espresso Gold) */
+[data-app-theme="amber"] {
+  --theme-canvas: #100c08;
+  --theme-surface: #19130d;
+  --theme-elevated: #231b12;
+  --theme-border: rgba(245, 158, 11, 0.20);
+  --theme-text: #fffbeb;
+  --theme-muted: #b8a38c;
+  --theme-accent: #f59e0b;
+  --theme-accent-soft: rgba(245, 158, 11, 0.14);
+  --theme-accent-text: #fbbf24;
+  --theme-header: rgba(16, 12, 8, 0.94);
 }
 
-[data-app-theme="sapphire"] body,
-[data-app-theme="sapphire"] .theme-root {
-  background-color: #060e1c !important;
+/* Apply Unified Theme Tokens Cohesively Across All App Elements */
+body,
+.theme-root {
+  background-color: var(--theme-canvas) !important;
+  color: var(--theme-text);
 }
 
-[data-app-theme="sapphire"] header {
-  background-color: rgba(8, 18, 36, 0.95) !important;
-  border-bottom-color: rgba(56, 189, 248, 0.22) !important;
-  box-shadow: 0 4px 24px rgba(56, 189, 248, 0.06);
+.theme-root header {
+  background-color: var(--theme-header) !important;
+  border-bottom-color: var(--theme-border) !important;
 }
 
-[data-app-theme="amber"] body,
-[data-app-theme="amber"] .theme-root {
-  background-color: #120e0a !important;
+.theme-root .theme-card,
+.theme-root.dark .dark\:bg-zinc-800,
+.theme-root.dark .dark\:bg-zinc-900,
+.theme-root.dark .dark\:bg-zinc-850 {
+  background-color: var(--theme-surface);
+  border-color: var(--theme-border);
 }
 
-[data-app-theme="amber"] header {
-  background-color: rgba(24, 18, 12, 0.95) !important;
-  border-bottom-color: rgba(245, 158, 11, 0.25) !important;
-  box-shadow: 0 4px 24px rgba(245, 158, 11, 0.06);
+.theme-root.dark .dark\:bg-zinc-900\/50,
+.theme-root.dark .dark\:bg-zinc-900\/60,
+.theme-root.dark .dark\:bg-zinc-900\/95,
+.theme-root.dark .dark\:bg-zinc-800\/40,
+.theme-root.dark .dark\:bg-zinc-800\/50,
+.theme-root.dark .dark\:bg-zinc-800\/60,
+.theme-root.dark .dark\:bg-zinc-800\/70,
+.theme-root.dark .dark\:bg-zinc-800\/80,
+.theme-root.dark .dark\:bg-zinc-850\/90,
+.theme-root.dark .dark\:bg-zinc-950\/40 {
+  background-color: var(--theme-elevated);
 }
 
-/* Card Glow and Focus Accents */
-[data-app-theme="cyber"] .border-zinc-200,
-[data-app-theme="cyber"] .dark\:border-zinc-700,
-[data-app-theme="cyber"] .dark\:border-zinc-800 {
-  border-color: rgba(0, 240, 255, 0.18) !important;
+.theme-root .border-zinc-200,
+.theme-root .dark\:border-zinc-700,
+.theme-root .dark\:border-zinc-700\/60,
+.theme-root .dark\:border-zinc-700\/80,
+.theme-root .dark\:border-zinc-800 {
+  border-color: var(--theme-border) !important;
 }
 
-[data-app-theme="neon"] .border-zinc-200,
-[data-app-theme="neon"] .dark\:border-zinc-700,
-[data-app-theme="neon"] .dark\:border-zinc-800 {
-  border-color: rgba(236, 72, 153, 0.2) !important;
+.theme-root input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+.theme-root textarea,
+.theme-root select {
+  border-color: var(--theme-border);
 }
 
-[data-app-theme="sapphire"] .border-zinc-200,
-[data-app-theme="sapphire"] .dark\:border-zinc-700,
-[data-app-theme="sapphire"] .dark\:border-zinc-800 {
-  border-color: rgba(56, 189, 248, 0.18) !important;
+.theme-root.dark input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+.theme-root.dark textarea,
+.theme-root.dark select {
+  background-color: var(--theme-elevated);
+  color: var(--theme-text);
 }
 
-[data-app-theme="amber"] .border-zinc-200,
-[data-app-theme="amber"] .dark\:border-zinc-700,
-[data-app-theme="amber"] .dark\:border-zinc-800 {
-  border-color: rgba(245, 158, 11, 0.18) !important;
+/* Native Range & Checkbox Theme Accent Consistency */
+.theme-root input[type="range"],
+.theme-root input[type="checkbox"] {
+  accent-color: var(--theme-accent);
 }
-

@@ -19,7 +19,6 @@ import {
   AlertCircle,
   Settings,
   MessageSquare,
-  Terminal,
   GripHorizontal,
   Save,
   RotateCcw,
@@ -35,6 +34,7 @@ import {
   Palette,
   Sparkles,
   Copy,
+  ClipboardPaste,
   FileCode,
   ArrowLeft,
   Sliders,
@@ -72,7 +72,13 @@ import {
   Redo2,
   RefreshCw,
   Stamp,
-  History
+  History,
+  Home,
+  ZoomIn,
+  AlertTriangle,
+  Bell,
+  Code2,
+  EyeOff
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -95,9 +101,18 @@ import {
   batchDeleteSubtitles,
   createOriginalTimingMap,
   resetSubtitleTimings,
+  splitAllLongSubtitles,
   OriginalTimingMap
 } from './utils/subtitleOperations';
-import { GeminiService, TranslationResult, translateTextGoogle, translateBatchGoogle } from './services/gemini';
+import {
+  GeminiService,
+  TranslationResult,
+  translateTextGoogle,
+  translateBatchGoogle,
+  getStoredGeminiApiKey,
+  setStoredGeminiApiKey,
+  clearStoredGeminiApiKey,
+} from './services/gemini';
 import { GeminiQuotaDashboard } from './components/GeminiQuotaDashboard';
 import { SubtitleStylizerModal } from './components/SubtitleStylizerModal';
 import { TranslationSettingsModal } from './components/TranslationSettingsModal';
@@ -113,9 +128,24 @@ import { SubtitlePreviewSpaceModal } from './components/SubtitlePreviewSpaceModa
 import { GoogleTranslateSettingsModal } from './components/GoogleTranslateSettingsModal';
 import { AiConfigModal } from './components/AiConfigModal';
 import { UnifiedDownloadModal } from './components/UnifiedDownloadModal';
-import { AndroidGuideModal } from './components/AndroidGuideModal';
+import { HomeTabView } from './components/HomeTabView';
+import { MobileSubtitleCard, WorkspaceStreamField } from './components/MobileSubtitleCard';
+import { TranslatorTabView } from './components/TranslatorTabView';
+import { StylingTabView } from './components/StylingTabView';
+import { DownloadTabView, DownloadFormat } from './components/DownloadTabView';
+import { MenuSettingsTabView, SettingsCategoryId, TranslationSubMenuId } from './components/MenuSettingsTabView';
 import { ThemeSelector, AppTheme } from './components/ThemeSelector';
 import { InfoPopover } from './components/InfoPopover';
+import { ConfirmDialogModal } from './components/ConfirmDialogModal';
+import { detectLineDirection } from './components/FormattedRichText';
+import { useBodyScrollLock } from './utils/scrollLock';
+import { getClampedPopoverStyle } from './utils/popoverPlacement';
+import { OnScreenSlidersBar } from './components/OnScreenSlidersBar';
+import { MySubtitlesDrawer } from './components/MySubtitlesDrawer';
+import { TranslatorDrawer } from './components/TranslatorDrawer';
+import { WorkspaceDrawer } from './components/WorkspaceDrawer';
+import { TextResizePopupModal } from './components/TextResizePopupModal';
+import { FontsPopupModal } from './components/FontsPopupModal';
 import { 
   TranslationSettings, 
   DEFAULT_TRANSLATION_SETTINGS, 
@@ -149,7 +179,24 @@ import { quotaManager, FeasibilityReport } from './services/quota';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
-import { dbService } from './services/db';
+import { dbService, ProjectDraft, CrashSnapshot, DetailedStorageBreakdown } from './services/db';
+import {
+  AppPreferences,
+  DEFAULT_APP_PREFERENCES,
+  DEFAULT_DEVELOPER_SETTINGS,
+  MobileTab,
+  GlossaryEntry,
+  FullAppBackup,
+  SubtitleQcIssue,
+  loadAppPreferences,
+  saveAppPreferences,
+  applyPreferencesToDOM,
+  loadGlossary,
+  saveGlossary,
+  buildGlossaryInstruction,
+  clampZoom,
+  paddingToContainerSize,
+} from './services/appPreferences';
 import { SubtitleRowEditableCell } from './components/SubtitleRowEditableCell';
 
 function cn(...inputs: ClassValue[]) {
@@ -217,24 +264,31 @@ const SubtitleRow = memo(({
   onToggleSelect,
   visibleColumns = { time: true, original: true, ai: true, google: true },
   originalFont = ENGLISH_FONT_OPTIONS[0].value,
-  originalFontSize = 14,
+  originalFontSize = 16,
   urduFont = URDU_FONT_OPTIONS[0].value,
-  translatedFontSize = 22,
+  translatedFontSize = 16,
   googleFont = URDU_FONT_OPTIONS[0].value,
-  googleFontSize = 14,
+  googleFontSize = 16,
   isGlobalFontActive = false,
   globalFont = URDU_FONT_OPTIONS[0].value,
-  globalFontSize = 20,
+  globalFontSize = 16,
   activeStylingConfig,
   isStylingPreviewActive = true,
   isReadOnly = true,
   onEditOriginal,
   onEditTranslated,
   onEditGoogle,
-  onOpenWatermark
+  onOpenWatermark,
+  canUndoBlock = false,
+  canRedoBlock = false,
+  onUndoBlock,
+  onRedoBlock,
+  onLongPressField,
+  onLongPressColumn,
+  editTriggerTarget
 }: { 
   item: SubtitleItem; 
-  onOpenEditor: (index: number) => void;
+  onOpenEditor: (index: number, stream?: WorkspaceStreamField) => void;
   onTranslateGoogle?: (index: number) => Promise<void> | void;
   isSelected?: boolean;
   onToggleSelect?: (index: number) => void;
@@ -255,9 +309,72 @@ const SubtitleRow = memo(({
   onEditTranslated?: (index: number, text: string) => void;
   onEditGoogle?: (index: number, text: string) => void;
   onOpenWatermark?: () => void;
+  canUndoBlock?: boolean;
+  canRedoBlock?: boolean;
+  onUndoBlock?: (index: number) => void;
+  onRedoBlock?: (index: number) => void;
+  onLongPressField?: (index: number, field: WorkspaceStreamField, pos: { x: number; y: number }) => void;
+  onLongPressColumn?: (field: WorkspaceStreamField, pos: { x: number; y: number }) => void;
+  editTriggerTarget?: { index: number; field: WorkspaceStreamField; nonce: number } | null;
 }) => {
   const [isTranslatingRow, setIsTranslatingRow] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  const colLongPressRef = useRef<{
+    timer: ReturnType<typeof setTimeout> | null;
+    startX: number;
+    startY: number;
+  }>({ timer: null, startX: 0, startY: 0 });
+
+  const clearColLongPress = () => {
+    if (colLongPressRef.current.timer) {
+      clearTimeout(colLongPressRef.current.timer);
+      colLongPressRef.current.timer = null;
+    }
+  };
+
+  const startColLongPress = (
+    e: React.TouchEvent<HTMLTableCellElement>,
+    field: WorkspaceStreamField
+  ) => {
+    if (!onLongPressColumn) return;
+    const target = e.target as HTMLElement | null;
+    if (target && target.closest('[data-sub-cell="true"], button, input, textarea')) return;
+    const t = e.touches[0];
+    if (!t) return;
+    colLongPressRef.current.startX = t.clientX;
+    colLongPressRef.current.startY = t.clientY;
+    const pos = { x: t.clientX, y: t.clientY };
+    clearColLongPress();
+    colLongPressRef.current.timer = setTimeout(() => {
+      colLongPressRef.current.timer = null;
+      onLongPressColumn(field, pos);
+    }, 480);
+  };
+
+  const moveColLongPress = (e: React.TouchEvent<HTMLTableCellElement>) => {
+    if (!colLongPressRef.current.timer) return;
+    const t = e.touches[0];
+    if (!t) return;
+    if (
+      Math.abs(t.clientX - colLongPressRef.current.startX) > 8 ||
+      Math.abs(t.clientY - colLongPressRef.current.startY) > 8
+    ) {
+      clearColLongPress();
+    }
+  };
+
+  const handleColContextMenu = (
+    e: React.MouseEvent<HTMLTableCellElement>,
+    field: WorkspaceStreamField
+  ) => {
+    if (!onLongPressColumn) return;
+    const target = e.target as HTMLElement | null;
+    if (target && target.closest('[data-sub-cell="true"], button, input, textarea')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    onLongPressColumn(field, { x: e.clientX, y: e.clientY });
+  };
 
   const localText = item.translatedText || '';
 
@@ -439,21 +556,25 @@ const SubtitleRow = memo(({
 
   const isRomanOrLatin = useMemo(() => {
     if (!localText) return false;
-    const clean = localText.replace(/<[^>]+>/g, '');
+    const clean = localText.replace(/<[^>]+>|\{[^}]+\}/g, '');
+    const urduCount = (clean.match(/[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/g) || []).length;
+    if (urduCount > 0) return false;
     const latinCount = (clean.match(/[a-zA-Z]/g) || []).length;
-    const urduCount = (clean.match(/[\u0600-\u06FF\u0750-\u077F]/g) || []).length;
-    return latinCount > urduCount;
+    return latinCount > 0;
   }, [localText]);
 
   const isBilingual = useMemo(() => {
-    return localText.includes('\n') && /[a-zA-Z]/.test(localText) && /[\u0600-\u06FF]/.test(localText);
+    const clean = localText.replace(/<[^>]+>|\{[^}]+\}/g, '');
+    return clean.includes('\n') && /[a-zA-Z]/.test(clean) && /[\u0600-\u06FF\u0750-\u077F]/.test(clean);
   }, [localText]);
 
   const isGoogleRomanOrLatin = useMemo(() => {
     if (!item.googleTranslateText) return false;
-    const latinCount = (item.googleTranslateText.match(/[a-zA-Z]/g) || []).length;
-    const urduCount = (item.googleTranslateText.match(/[\u0600-\u06FF\u0750-\u077F]/g) || []).length;
-    return latinCount > urduCount;
+    const clean = item.googleTranslateText.replace(/<[^>]+>|\{[^}]+\}/g, '');
+    const urduCount = (clean.match(/[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/g) || []).length;
+    if (urduCount > 0) return false;
+    const latinCount = (clean.match(/[a-zA-Z]/g) || []).length;
+    return latinCount > 0;
   }, [item.googleTranslateText]);
 
   const timingInfo = useMemo(() => {
@@ -475,41 +596,49 @@ const SubtitleRow = memo(({
     }
   };
 
+  const origDir = useMemo(() => detectLineDirection(item.text || ''), [item.text]);
+
   // Active Typography Styles per column
-  const effectiveOriginalFont = isGlobalFontActive ? globalFont : originalFont;
+  const effectiveOriginalFont = isGlobalFontActive ? globalFont : (origDir === 'rtl' ? urduFont : originalFont);
   const effectiveOriginalSize = isGlobalFontActive ? globalFontSize : originalFontSize;
 
   const effectiveAiFont = isGlobalFontActive ? globalFont : (isRomanOrLatin ? 'inherit' : urduFont);
   const effectiveAiSize = isGlobalFontActive ? globalFontSize : translatedFontSize;
 
   const effectiveGoogleFont = isGlobalFontActive ? globalFont : (isGoogleRomanOrLatin ? 'inherit' : googleFont);
-  const effectiveGoogleSize = isGlobalFontActive ? Math.round(globalFontSize * 0.9) : googleFontSize;
+  const effectiveGoogleSize = isGlobalFontActive ? globalFontSize : googleFontSize;
 
   return (
-    <tr 
+    <tr
       onDoubleClick={() => onOpenEditor(item.index)}
       className={cn(
-        "group transition-colors border-b border-zinc-200/60 dark:border-zinc-700/40 cursor-default",
-        item.index === 1 && "border-l-4 border-l-amber-500 dark:border-l-amber-400 bg-amber-500/[0.03]",
-        isSelected 
-          ? "bg-emerald-500/10 dark:bg-emerald-500/15" 
-          : "hover:bg-emerald-50/20 dark:hover:bg-emerald-950/20"
+        'group transition-colors border-b cursor-default',
+        item.index === 1 && 'border-l-2 border-l-amber-500'
       )}
-      title={item.index === 1 ? "Block #1 (Watermark & Credits). Double-click to edit in studio" : "Double-click to open dedicated Subtitle Editor Studio"}
+      style={{
+        borderColor: 'var(--theme-border)',
+        backgroundColor: isSelected ? 'var(--theme-accent-soft)' : 'transparent',
+      }}
+      title={item.index === 1 ? 'Block #1 (Watermark). Double-click to edit' : 'Double-click to open Editor'}
     >
-      {/* Checkbox and Index */}
-      <td className="p-3 text-[10px] font-mono text-zinc-400 dark:text-zinc-500 align-top w-14 text-center">
-        <div className="flex flex-col items-center gap-1.5">
+      {/* Sticky Checkbox and Index */}
+      <td
+        className="sticky left-0 z-10 p-1.5 text-[10px] font-mono opacity-80 align-top w-10 text-center tabular-nums border-r"
+        style={{
+          backgroundColor: isSelected ? 'var(--theme-accent-soft)' : 'var(--theme-surface)',
+          borderColor: 'var(--theme-border)',
+        }}
+      >
+        <div className="flex flex-col items-center gap-1">
           <input
             type="checkbox"
             checked={isSelected}
             onChange={() => onToggleSelect?.(item.index)}
-            className="accent-emerald-600 rounded cursor-pointer w-3.5 h-3.5"
+            className="rounded cursor-pointer w-3.5 h-3.5"
             title={`Select row #${item.index}`}
           />
-          <span className="font-bold">{item.index}</span>
+          <span className="font-semibold">{item.index}</span>
 
-          {/* Watermark badge on first row / block */}
           {item.index === 1 && (
             <button
               type="button"
@@ -517,19 +646,19 @@ const SubtitleRow = memo(({
                 e.stopPropagation();
                 onOpenWatermark?.();
               }}
-              className="mt-0.5 px-1.5 py-0.5 rounded-md bg-amber-500/15 hover:bg-amber-500/25 dark:bg-amber-500/25 dark:hover:bg-amber-500/35 text-amber-700 dark:text-amber-300 border border-amber-500/35 font-extrabold text-[8px] uppercase tracking-wider flex items-center gap-1 shadow-2xs transition-all cursor-pointer select-none"
-              title="Block #1 Watermark / Credits. Click to customize watermark"
+              className="mt-0.5 px-1 py-0.5 rounded border border-amber-500/35 text-amber-500 font-semibold text-[8px] uppercase flex items-center gap-0.5 cursor-pointer select-none"
+              style={{ backgroundColor: 'var(--theme-elevated)' }}
+              title="Block #1 Watermark"
             >
-              <Stamp size={8.5} className="text-amber-600 dark:text-amber-400" />
-              <span>Watermark</span>
+              <Stamp size={8} />
             </button>
           )}
 
           {item.styleColor && (
-            <span 
-              className="w-2.5 h-2.5 rounded-full shadow-xs ring-1 ring-black/10 dark:ring-white/10" 
-              style={{ backgroundColor: item.styleColor }} 
-              title={`Gradient Color: ${item.styleColor}`}
+            <span
+              className="w-2 h-2 rounded-full"
+              style={{ backgroundColor: item.styleColor }}
+              title={`Color: ${item.styleColor}`}
             />
           )}
         </div>
@@ -537,23 +666,21 @@ const SubtitleRow = memo(({
 
       {/* Timing Column */}
       {visibleColumns.time && (
-        <td className="p-3 text-[9px] font-mono text-zinc-500 dark:text-zinc-400 leading-tight align-top w-36 shrink-0">
-          <div className="font-medium text-zinc-700 dark:text-zinc-300">{item.startTime}</div>
-          <div className="text-zinc-300 dark:text-zinc-600">↓</div>
-          <div className="font-medium text-zinc-700 dark:text-zinc-300">{item.endTime}</div>
-          
-          <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-            <span className="text-[8px] font-bold px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300">
-              {timingInfo.durationSec}s
-            </span>
-            <span className={cn(
-              "text-[8px] font-bold px-1.5 py-0.5 rounded font-mono",
-              timingInfo.cps > 25 
-                ? "bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-300 border border-red-300 dark:border-red-800"
-                : timingInfo.cps > 18
-                ? "bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300"
-                : "bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400"
-            )} title={timingInfo.cps > 25 ? "Warning: High CPS (>25) may be too fast for viewers" : "Characters per second"}>
+        <td className="p-1.5 text-[9.5px] font-mono opacity-75 leading-tight align-top w-28 shrink-0 tabular-nums">
+          <div className="font-medium">{item.startTime}</div>
+          <div className="opacity-35">↓</div>
+          <div className="font-medium">{item.endTime}</div>
+
+          <div className="flex items-center gap-1 mt-1 flex-wrap text-[8.5px]">
+            <span className="opacity-70">{timingInfo.durationSec}s</span>
+            <span>·</span>
+            <span
+              className={cn(
+                'font-mono',
+                timingInfo.cps > 25 ? 'text-red-500 font-semibold' : timingInfo.cps > 18 ? 'text-amber-500' : 'opacity-70'
+              )}
+              title="Characters per second"
+            >
               {timingInfo.cps} cps
             </span>
           </div>
@@ -562,78 +689,97 @@ const SubtitleRow = memo(({
 
       {/* Original Language Column */}
       {visibleColumns.original && (
-        <td 
-          className="p-3 leading-relaxed font-medium text-zinc-800 dark:text-zinc-200 transition-all duration-150 align-top max-w-xs md:max-w-md" 
-          style={{ 
+        <td
+          onTouchStart={(e) => startColLongPress(e, 'orig')}
+          onTouchMove={moveColLongPress}
+          onTouchEnd={clearColLongPress}
+          onTouchCancel={clearColLongPress}
+          onContextMenu={(e) => handleColContextMenu(e, 'orig')}
+          className="p-1.5 leading-snug font-medium transition-colors align-top min-w-[200px]"
+          style={{
             fontSize: `${effectiveOriginalSize}px`,
-            fontFamily: effectiveOriginalFont
+            fontFamily: effectiveOriginalFont,
           }}
         >
-          <SubtitleRowEditableCell
-            value={item.text || ''}
-            isReadOnly={isReadOnly}
-            onCommit={(newText) => onEditOriginal?.(item.index, newText)}
-            fontFamily={effectiveOriginalFont}
-            fontSize={effectiveOriginalSize}
-            className={originalCss.className}
-            style={originalCss.style}
-            displayHtml={originalDisplayHtml}
-            placeholder="Edit source dialogue..."
-            emptyLabel="No source text"
-          />
-          <div className="mt-1 flex items-center gap-2 text-[9px] text-zinc-400 dark:text-zinc-500 font-sans">
-            <span>{(item.text || '').length} chars</span>
-            {hasSoundCues && (
-              <span className="text-[8px] px-1 py-0.2 rounded bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300 font-mono font-bold">
-                Audio Cue
-              </span>
-            )}
-            {(hasOriginalFormatting || shouldStyleOriginal) && (
-              <span className="text-[8px] px-1 py-0.2 rounded bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-bold font-mono">
-                Stylized
-              </span>
-            )}
+          <div data-sub-cell="true" className="w-full">
+            <SubtitleRowEditableCell
+              value={item.text || ''}
+              isReadOnly={isReadOnly}
+              onCommit={(newText) => onEditOriginal?.(item.index, newText)}
+              fontFamily={effectiveOriginalFont}
+              fontSize={effectiveOriginalSize}
+              dir={origDir}
+              className={cn(origDir === 'rtl' ? 'text-right font-urdu' : 'text-left', originalCss.className)}
+              style={originalCss.style}
+              displayHtml={originalDisplayHtml}
+              placeholder="Source text..."
+              emptyLabel="—"
+              onLongPress={(pos) => onLongPressField?.(item.index, 'orig', pos)}
+              editTriggerNonce={
+                editTriggerTarget?.index === item.index && editTriggerTarget.field === 'orig'
+                  ? editTriggerTarget.nonce
+                  : undefined
+              }
+            />
+          </div>
+          <div className="mt-1 flex items-center gap-1.5 text-[9px] opacity-55 font-sans tabular-nums">
+            <span>{(item.text || '').length}c</span>
+            {hasSoundCues && <span>· Cue</span>}
+            {(hasOriginalFormatting || shouldStyleOriginal) && <span>· Styled</span>}
           </div>
         </td>
       )}
 
-      {/* AI Translated Language Column (Direct In-Place Editable when unlocked, halted background re-rendering) */}
+      {/* AI Translated Column */}
       {visibleColumns.ai && (
-        <td className="p-3 align-top min-w-[240px]">
-          <div className="py-0.5 group/cell relative">
-            <SubtitleRowEditableCell
-              value={item.translatedText || ''}
-              isReadOnly={isReadOnly}
-              onCommit={(newText) => onEditTranslated?.(item.index, newText)}
-              fontFamily={effectiveAiFont}
-              fontSize={effectiveAiSize}
-              dir={isRomanOrLatin ? "ltr" : isBilingual ? "auto" : "rtl"}
-              className={cn(
-                isRomanOrLatin ? "text-left font-sans" : "text-right font-urdu",
-                aiCss.className
-              )}
-              style={aiCss.style}
-              displayHtml={aiDisplayHtml}
-              placeholder="اردو ترجمہ / Roman Urdu..."
-              emptyLabel="No translation yet"
-            />
+        <td
+          onTouchStart={(e) => startColLongPress(e, 'ai')}
+          onTouchMove={moveColLongPress}
+          onTouchEnd={clearColLongPress}
+          onTouchCancel={clearColLongPress}
+          onContextMenu={(e) => handleColContextMenu(e, 'ai')}
+          className="p-1.5 align-top min-w-[200px]"
+        >
+          <div className="py-0.5 group/cell relative w-full">
+            <div data-sub-cell="true" className="w-full">
+              <SubtitleRowEditableCell
+                value={item.translatedText || ''}
+                isReadOnly={isReadOnly}
+                onCommit={(newText) => onEditTranslated?.(item.index, newText)}
+                fontFamily={effectiveAiFont}
+                fontSize={effectiveAiSize}
+                dir={isBilingual ? 'auto' : isRomanOrLatin ? 'ltr' : detectLineDirection(localText || 'ا')}
+                className={cn(isRomanOrLatin ? 'text-left font-sans' : 'text-right font-urdu', aiCss.className)}
+                style={aiCss.style}
+                displayHtml={aiDisplayHtml}
+                placeholder="ترجمہ..."
+                emptyLabel="—"
+                onLongPress={(pos) => onLongPressField?.(item.index, 'ai', pos)}
+                editTriggerNonce={
+                  editTriggerTarget?.index === item.index && editTriggerTarget.field === 'ai'
+                    ? editTriggerTarget.nonce
+                    : undefined
+                }
+              />
+            </div>
 
-            <div className="flex items-center justify-between gap-2 mt-1.5 text-[8.5px] font-mono text-zinc-400 dark:text-zinc-500">
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <span>{localText.replace(/<[^>]+>/g, '').length} chars</span>
-                {isRomanOrLatin && <span className="text-blue-600 dark:text-blue-400 font-bold">Roman Urdu</span>}
-                {(isStylized || shouldStyleAi) && <span className="text-emerald-600 dark:text-emerald-400 font-bold">Stylized</span>}
+            <div className="flex items-center justify-between gap-1.5 mt-1 text-[9px] font-mono opacity-60 tabular-nums">
+              <div className="flex items-center gap-1 flex-wrap">
+                <span>{localText.replace(/<[^>]+>/g, '').length}c</span>
+                {isRomanOrLatin && <span>· Roman</span>}
+                {(isStylized || shouldStyleAi) && <span style={{ color: 'var(--theme-accent)' }}>· Styled</span>}
               </div>
 
               {localText && (
                 <button
                   type="button"
                   onClick={handleCopy}
-                  className="opacity-0 group-hover/cell:opacity-100 transition-opacity flex items-center gap-1 px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200 text-[8px] font-bold cursor-pointer"
+                  className="opacity-0 group-hover/cell:opacity-100 transition-opacity flex items-center gap-1 px-1.5 py-0.5 rounded border text-[9px] font-semibold cursor-pointer"
+                  style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
                   title="Copy translation"
                 >
-                  {copied ? <Check size={9} className="text-emerald-500" /> : <Copy size={9} />}
-                  <span>{copied ? "Copied" : "Copy"}</span>
+                  {copied ? <Check size={9} style={{ color: 'var(--theme-accent)' }} /> : <Copy size={9} />}
+                  <span>{copied ? 'Copied' : 'Copy'}</span>
                 </button>
               )}
             </div>
@@ -641,46 +787,72 @@ const SubtitleRow = memo(({
         </td>
       )}
 
-      {/* Google Translation Column */}
+      {/* Neutral / Google Compare Column */}
       {visibleColumns.google && (
-        <td className="p-3 align-top min-w-[180px] max-w-xs">
-          <div className="space-y-1.5">
-            {item.googleTranslateText && item.googleTranslateText !== 'Translation Error' ? (
-              <div className="p-1.5 rounded-lg bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200/60 dark:border-zinc-700/50">
-                <div 
-                  className={cn(
-                    "text-zinc-700 dark:text-zinc-300 italic leading-[2.2] transition-all duration-150 p-1 select-text break-words whitespace-pre-line",
-                    isGoogleRomanOrLatin ? "text-left font-sans" : "text-right font-urdu",
-                    googleCss.className
-                  )} 
-                  dir={isGoogleRomanOrLatin ? "ltr" : "rtl"} 
-                  style={{ 
-                    fontSize: `${effectiveGoogleSize}px`,
-                    fontFamily: effectiveGoogleFont,
-                    ...googleCss.style
-                  }}
-                  dangerouslySetInnerHTML={googleDisplayHtml ? { __html: googleDisplayHtml } : undefined}
-                >
-                  {!googleDisplayHtml ? item.googleTranslateText : undefined}
-                </div>
+        <td
+          onTouchStart={(e) => startColLongPress(e, 'google')}
+          onTouchMove={moveColLongPress}
+          onTouchEnd={clearColLongPress}
+          onTouchCancel={clearColLongPress}
+          onContextMenu={(e) => handleColContextMenu(e, 'google')}
+          className="p-1.5 align-top min-w-[200px]"
+        >
+          <div className="space-y-1">
+            {(item.googleTranslateText && item.googleTranslateText !== 'Translation Error') || !isReadOnly ? (
+              <div
+                data-sub-cell="true"
+                className="w-full px-1.5 py-1 rounded-md border"
+                style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+              >
+                <SubtitleRowEditableCell
+                  value={item.googleTranslateText === 'Translation Error' ? '' : (item.googleTranslateText || '')}
+                  isReadOnly={isReadOnly}
+                  onCommit={(newText) => onEditGoogle?.(item.index, newText)}
+                  fontFamily={effectiveGoogleFont}
+                  fontSize={effectiveGoogleSize}
+                  dir={item.googleTranslateText ? (isGoogleRomanOrLatin ? 'ltr' : 'rtl') : 'rtl'}
+                  className={cn(isGoogleRomanOrLatin ? 'text-left font-sans' : 'text-right font-urdu', googleCss.className)}
+                  style={googleCss.style}
+                  displayHtml={googleDisplayHtml}
+                  placeholder="Neutral translation..."
+                  emptyLabel="—"
+                  onLongPress={(pos) => onLongPressField?.(item.index, 'google', pos)}
+                  editTriggerNonce={
+                    editTriggerTarget?.index === item.index && editTriggerTarget.field === 'google'
+                      ? editTriggerTarget.nonce
+                      : undefined
+                  }
+                />
                 {(hasGoogleFormatting || shouldStyleGoogle) && (
-                  <div className="mt-1 flex items-center gap-1 text-[8px] font-mono text-blue-600 dark:text-blue-400 font-bold">
-                    <span>Stylized Machine</span>
-                  </div>
+                  <div className="mt-0.5 text-[8.5px] font-mono opacity-60">Styled</div>
                 )}
               </div>
             ) : (
-              <div className="flex flex-col items-center justify-center p-2 rounded-lg border border-dashed border-zinc-200 dark:border-zinc-700/60 bg-zinc-50/40 dark:bg-zinc-800/20 gap-1 text-center">
-                <span className="text-zinc-400 dark:text-zinc-500 text-[9.5px]">No comparison</span>
+              <div
+                data-sub-cell="true"
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onLongPressField?.(item.index, 'google', { x: e.clientX, y: e.clientY });
+                }}
+                className="flex flex-col items-center justify-center p-1.5 rounded-md border border-dashed gap-1 text-center"
+                style={{ borderColor: 'var(--theme-border)' }}
+              >
+                <span className="opacity-45 text-[9.5px]">—</span>
                 {onTranslateGoogle && (
                   <button
                     type="button"
                     onClick={handleTranslateRow}
                     disabled={isTranslatingRow}
-                    className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:text-blue-600 dark:hover:text-blue-400 text-[9px] font-bold shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+                    className="flex items-center gap-1 px-2 py-0.5 rounded border text-[9px] font-semibold cursor-pointer disabled:opacity-50"
+                    style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
                   >
-                    {isTranslatingRow ? <Loader2 size={10} className="animate-spin text-blue-500" /> : <Languages size={10} className="text-blue-500" />}
-                    <span>Translate Line</span>
+                    {isTranslatingRow ? (
+                      <Loader2 size={9} className="animate-spin" style={{ color: 'var(--theme-accent)' }} />
+                    ) : (
+                      <Languages size={9} style={{ color: 'var(--theme-accent)' }} />
+                    )}
+                    <span>Translate</span>
                   </button>
                 )}
               </div>
@@ -689,25 +861,61 @@ const SubtitleRow = memo(({
         </td>
       )}
 
-      {/* Dedicated Action Trigger: Opens expanded modal studio focused on this row */}
-      <td className="p-3 align-top w-20 text-center">
-        <button
-          type="button"
-          onClick={() => onOpenEditor(item.index)}
-          className="flex items-center justify-center gap-1 w-full px-2.5 py-1.5 rounded-lg bg-zinc-100 hover:bg-emerald-100 active:bg-emerald-200 dark:bg-zinc-800 dark:hover:bg-emerald-950/80 text-zinc-700 hover:text-emerald-800 dark:text-zinc-300 dark:hover:text-emerald-300 font-bold text-[10px] uppercase tracking-wider transition-all border border-zinc-200 dark:border-zinc-700 hover:border-emerald-300 dark:hover:border-emerald-700 shadow-2xs group-hover:border-emerald-400/50 cursor-pointer"
-          title={`Open focused Subtitle Editor Studio for line #${item.index}`}
-        >
-          <Edit3 size={11} className="text-emerald-600 dark:text-emerald-400" />
-          <span>Edit</span>
-        </button>
+      {/* Action Cell: Studio Edit + Per-Block Undo/Redo */}
+      <td className="p-1.5 align-top w-16 text-center">
+        <div className="flex flex-col items-center gap-1">
+          <button
+            type="button"
+            onClick={() => onOpenEditor(item.index)}
+            className="flex items-center justify-center gap-1 w-full min-h-[26px] px-1.5 py-0.5 rounded-md border font-semibold text-[10px] transition-colors cursor-pointer"
+            style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+            title={`Edit line #${item.index}`}
+          >
+            <Edit3 size={10} style={{ color: 'var(--theme-accent)' }} />
+            <span>Edit</span>
+          </button>
+
+          {(onUndoBlock || onRedoBlock) && (
+            <div className="flex items-center justify-center gap-1 w-full">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onUndoBlock?.(item.index);
+                }}
+                disabled={!canUndoBlock}
+                className="flex-1 min-h-[24px] rounded border disabled:opacity-30 cursor-pointer flex items-center justify-center"
+                style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+                title={`Undo #${item.index}`}
+              >
+                <Undo2 size={10} />
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRedoBlock?.(item.index);
+                }}
+                disabled={!canRedoBlock}
+                className="flex-1 min-h-[24px] rounded border disabled:opacity-30 cursor-pointer flex items-center justify-center"
+                style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+                title={`Redo #${item.index}`}
+              >
+                <Redo2 size={10} />
+              </button>
+            </div>
+          )}
+        </div>
       </td>
     </tr>
   );
 }, (prevProps, nextProps) => {
   // Ultra-strict Selective Component Updating:
-  // If row item, selection, styles, fonts, and column visibility are identical, SKIP rerender!
+  // If row item, selection, styles, fonts, block undo state, and column visibility are identical, SKIP rerender!
   if (prevProps.isReadOnly !== nextProps.isReadOnly) return false;
   if (prevProps.isSelected !== nextProps.isSelected) return false;
+  if (prevProps.canUndoBlock !== nextProps.canUndoBlock) return false;
+  if (prevProps.canRedoBlock !== nextProps.canRedoBlock) return false;
   if (prevProps.isStylingPreviewActive !== nextProps.isStylingPreviewActive) return false;
   if (prevProps.activeStylingConfig !== nextProps.activeStylingConfig) return false;
   if (prevProps.isGlobalFontActive !== nextProps.isGlobalFontActive) return false;
@@ -715,6 +923,12 @@ const SubtitleRow = memo(({
   if (prevProps.originalFont !== nextProps.originalFont || prevProps.originalFontSize !== nextProps.originalFontSize) return false;
   if (prevProps.urduFont !== nextProps.urduFont || prevProps.translatedFontSize !== nextProps.translatedFontSize) return false;
   if (prevProps.googleFont !== nextProps.googleFont || prevProps.googleFontSize !== nextProps.googleFontSize) return false;
+
+  const prevTargetHere = prevProps.editTriggerTarget?.index === prevProps.item.index ? prevProps.editTriggerTarget : null;
+  const nextTargetHere = nextProps.editTriggerTarget?.index === nextProps.item.index ? nextProps.editTriggerTarget : null;
+  if (prevTargetHere?.nonce !== nextTargetHere?.nonce || prevTargetHere?.field !== nextTargetHere?.field) {
+    return false;
+  }
 
   if (prevProps.visibleColumns !== nextProps.visibleColumns) {
     if (
@@ -743,12 +957,12 @@ const SubtitleRow = memo(({
 
 SubtitleRow.displayName = 'SubtitleRow';
 
-// Resizable Container Component with robust non-scrolling touch handler and prominent standalone touch target
+// Resizable Container Component: attaches drag listeners only while dragging and stays auto-height on < lg mobile
 const ResizableBox = ({ 
   children, 
   initialHeight = 400, 
   minHeight = 200, 
-  maxHeight = 1200,
+  maxHeight = 1600,
   title,
   icon: Icon,
   actions,
@@ -768,9 +982,20 @@ const ResizableBox = ({
   const [height, setHeight] = useState(initialHeight);
   const [isDragging, setIsDragging] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isDesktop, setIsDesktop] = useState(() => (typeof window !== 'undefined' ? window.innerWidth >= 1024 : true));
   const isResizing = useRef(false);
   const startYRef = useRef(0);
   const startHeightRef = useRef(initialHeight);
+
+  useEffect(() => {
+    setHeight(initialHeight);
+  }, [initialHeight]);
+
+  useEffect(() => {
+    const onResizeWin = () => setIsDesktop(window.innerWidth >= 1024);
+    window.addEventListener('resize', onResizeWin);
+    return () => window.removeEventListener('resize', onResizeWin);
+  }, []);
 
   const isProjectControls = title.toLowerCase().includes('project control');
 
@@ -779,8 +1004,38 @@ const ResizableBox = ({
     setIsCollapsed(prev => !prev);
   }, [isProjectControls]);
 
+  const resize = useCallback((e: MouseEvent | TouchEvent) => {
+    if (!isResizing.current) return;
+    if (e.cancelable) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    const deltaY = clientY - startYRef.current;
+    const newHeight = Math.min(maxHeight, Math.max(minHeight, startHeightRef.current + deltaY));
+    setHeight(newHeight);
+  }, [minHeight, maxHeight]);
+
+  const stopResizing = useCallback(() => {
+    if (!isResizing.current) return;
+    isResizing.current = false;
+    setIsDragging(false);
+
+    window.removeEventListener('mousemove', resize);
+    window.removeEventListener('mouseup', stopResizing);
+    window.removeEventListener('touchmove', resize);
+    window.removeEventListener('touchend', stopResizing);
+    window.removeEventListener('touchcancel', stopResizing);
+
+    document.body.style.cursor = 'default';
+    document.body.style.userSelect = 'auto';
+    document.body.style.overflow = '';
+    document.body.style.touchAction = '';
+    document.documentElement.style.overflow = '';
+    document.documentElement.style.touchAction = '';
+  }, [resize]);
+
   const startResizing = useCallback((e: React.MouseEvent | React.TouchEvent) => {
-    // If touch event, prevent mobile browser from taking over as a page scroll
     if ('touches' in e) {
       if (e.cancelable) {
         e.preventDefault();
@@ -801,52 +1056,21 @@ const ResizableBox = ({
     isResizing.current = true;
     setIsDragging(true);
 
-    // Prevent background page scrolling while resizing cards on touch devices
     document.body.style.cursor = 'row-resize';
     document.body.style.userSelect = 'none';
     document.body.style.overflow = 'hidden';
     document.body.style.touchAction = 'none';
     document.documentElement.style.overflow = 'hidden';
     document.documentElement.style.touchAction = 'none';
-  }, [height, title]);
 
-  const stopResizing = useCallback(() => {
-    if (!isResizing.current) return;
-    isResizing.current = false;
-    setIsDragging(false);
-
-    // Restore background scrolling
-    document.body.style.cursor = 'default';
-    document.body.style.userSelect = 'auto';
-    document.body.style.overflow = '';
-    document.body.style.touchAction = '';
-    document.documentElement.style.overflow = '';
-    document.documentElement.style.touchAction = '';
-  }, []);
-
-  const resize = useCallback((e: MouseEvent | TouchEvent) => {
-    if (!isResizing.current) return;
-
-    // Prevent background page scrolling & touch conflicts while resizing
-    if (e.cancelable) {
-      e.preventDefault();
-      e.stopPropagation();
-    }
-
-    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
-    const deltaY = clientY - startYRef.current;
-    const newHeight = Math.min(maxHeight, Math.max(minHeight, startHeightRef.current + deltaY));
-    setHeight(newHeight);
-  }, [minHeight, maxHeight]);
-
-  useEffect(() => {
-    // Note: { passive: false } is mandatory to permit e.preventDefault() on mobile touchmove
     window.addEventListener('mousemove', resize);
     window.addEventListener('mouseup', stopResizing);
     window.addEventListener('touchmove', resize, { passive: false });
     window.addEventListener('touchend', stopResizing);
     window.addEventListener('touchcancel', stopResizing);
+  }, [height, title, resize, stopResizing]);
 
+  useEffect(() => {
     return () => {
       window.removeEventListener('mousemove', resize);
       window.removeEventListener('mouseup', stopResizing);
@@ -867,73 +1091,87 @@ const ResizableBox = ({
   }, [initialHeight]);
 
   return (
-    <div 
+    <div
       id={`resizable-${title}`}
       className={cn(
-        "bg-white dark:bg-zinc-800 rounded-2xl border border-zinc-200 dark:border-zinc-700/60 shadow-xs flex flex-col relative",
-        !isDragging && "transition-[height,border-color,box-shadow] duration-200",
-        isFullScreen ? "fixed inset-0 z-[100] h-screen w-screen rounded-none" : ""
+        'rounded-xl border flex flex-col relative theme-card',
+        !isDragging && 'transition-[height,border-color] duration-200',
+        isFullScreen ? 'fixed inset-0 z-[100] h-[100dvh] w-screen rounded-none' : ''
       )}
-      style={{ height: isFullScreen ? '100vh' : isCollapsed ? 'auto' : `${height}px` }}
+      style={{
+        height: isFullScreen ? '100dvh' : isCollapsed ? 'auto' : isDesktop ? `${height}px` : 'auto',
+        backgroundColor: 'var(--theme-surface)',
+        borderColor: 'var(--theme-border)',
+      }}
     >
-      {/* Workspace / Box Header */}
-      <div 
-        className="p-3 md:p-3.5 border-b border-zinc-200 dark:border-zinc-700/60 bg-zinc-50 dark:bg-zinc-800/90 relative z-30 shrink-0"
+      {/* Slim Container Header — touching anywhere on header title row expands/collapses */}
+      <div
+        className="px-2.5 py-2 border-b relative z-30 shrink-0 rounded-t-xl"
+        style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
       >
-        <div className="flex flex-col gap-2.5 w-full">
-          <div className="flex items-center justify-between gap-2 shrink-0 w-full">
-            <div 
-              onClick={toggleCollapse}
-              className={cn(
-                "flex items-center gap-2 select-none",
-                !isProjectControls && "cursor-pointer group/title hover:opacity-85 transition-opacity"
-              )}
-              title={!isProjectControls ? (isCollapsed ? "Click box name to expand" : "Click box name to collapse") : undefined}
-            >
-              <Icon size={16} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
-              <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-700 dark:text-zinc-200 whitespace-nowrap group-hover/title:text-emerald-600 dark:group-hover/title:text-emerald-400 transition-colors">
+        <div className="flex flex-col gap-2 w-full">
+          <div
+            onClick={toggleCollapse}
+            className={cn(
+              'flex items-center justify-between gap-2 shrink-0 w-full select-none',
+              !isProjectControls && 'cursor-pointer hover:opacity-85 transition-opacity'
+            )}
+            title={!isProjectControls ? (isCollapsed ? 'Expand' : 'Collapse') : undefined}
+          >
+            <div className="flex items-center gap-1.5 min-w-0">
+              <Icon size={14} className="shrink-0" style={{ color: 'var(--theme-accent)' }} />
+              <span className="text-[11px] font-semibold uppercase tracking-wider whitespace-nowrap truncate">
                 {title}
               </span>
               {!isProjectControls && (
-                <ChevronDown 
-                  size={13} 
-                  className={cn(
-                    "text-zinc-400 group-hover/title:text-emerald-500 transition-transform duration-200",
-                    isCollapsed && "-rotate-90"
-                  )} 
+                <ChevronDown
+                  size={13}
+                  className={cn('opacity-55 transition-transform duration-150 shrink-0', isCollapsed && '-rotate-90')}
                 />
               )}
             </div>
             {onFullScreenToggle && (
-              <button 
-                onClick={onFullScreenToggle}
-                className="p-1.5 bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 rounded-lg transition-all text-zinc-600 dark:text-zinc-300 cursor-pointer"
-                title={isFullScreen ? "Exit Full Screen" : "Full Screen"}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onFullScreenToggle();
+                }}
+                className="p-1.5 rounded-md border hover:opacity-85 transition-opacity cursor-pointer shrink-0"
+                style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+                title={isFullScreen ? 'Exit Full Screen' : 'Full Screen'}
               >
-                {isFullScreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                {isFullScreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
               </button>
             )}
           </div>
-          
-          <div className="flex items-center gap-2 flex-wrap relative z-40 w-full">
+
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="flex items-center gap-1.5 relative z-40 shrink-0"
+          >
             {actions}
           </div>
         </div>
       </div>
 
       {!isCollapsed && (
-        <div className="flex-1 overflow-auto relative z-10">
+        <div
+          className={cn(
+            'relative z-10',
+            isDesktop || isFullScreen ? 'flex-1 min-h-0 overflow-auto' : ''
+          )}
+        >
           {children}
         </div>
       )}
-      
-      {!isFullScreen && !isCollapsed && (
-        <div 
-          className="border-t border-zinc-200/90 dark:border-zinc-700/80 bg-zinc-50/95 dark:bg-zinc-800/95 py-1 px-3 flex items-center justify-center shrink-0 select-none"
-          style={{ touchAction: 'none' }}
+
+      {!isFullScreen && !isCollapsed && isDesktop && (
+        <div
+          className="border-t py-1 px-3 flex items-center justify-center shrink-0 select-none rounded-b-xl"
+          style={{ touchAction: 'none', backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
         >
-          {/* Reduced to 1/3 size: compact, elegant drag-to-resize handle */}
-          <div 
+          <div
             role="separator"
             aria-orientation="horizontal"
             tabIndex={0}
@@ -941,19 +1179,19 @@ const ResizableBox = ({
             onTouchStart={startResizing}
             onDoubleClick={handleResetHeight}
             className={cn(
-              "group h-4 min-h-[16px] w-24 sm:w-28 rounded-full flex items-center justify-center gap-1.5 cursor-row-resize touch-none select-none transition-all px-2 py-0",
-              isDragging 
-                ? "bg-emerald-600 text-white shadow-md ring-2 ring-emerald-500/40 border border-emerald-500 scale-[1.01]" 
-                : "bg-white dark:bg-zinc-700/90 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-zinc-500 dark:text-zinc-300 hover:text-emerald-700 dark:hover:text-emerald-300 border border-zinc-300/80 dark:border-zinc-600 shadow-2xs hover:shadow-xs hover:border-emerald-400"
+              'group h-3.5 w-24 rounded-full flex items-center justify-center gap-1 cursor-row-resize touch-none select-none transition-colors px-2',
+              isDragging ? 'text-white' : 'border opacity-75 hover:opacity-100'
             )}
-            title="Drag to resize box height (Double-click to reset)"
+            style={
+              isDragging
+                ? { backgroundColor: 'var(--theme-accent)' }
+                : { backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }
+            }
+            title="Drag to resize height (double-click to reset)"
           >
-            <GripHorizontal size={11} className={cn("transition-transform shrink-0", isDragging ? "text-white scale-110" : "text-zinc-400 dark:text-zinc-400 group-hover:text-emerald-600 dark:group-hover:text-emerald-400")} />
-            <span className={cn(
-              "text-[7.5px] font-bold uppercase tracking-wider select-none pointer-events-none truncate",
-              isDragging ? "text-white" : "text-zinc-500 dark:text-zinc-400 group-hover:text-emerald-700 dark:group-hover:text-emerald-300"
-            )}>
-              {isDragging ? `${Math.round(height)}px` : "Resize"}
+            <GripHorizontal size={11} />
+            <span className="text-[8px] font-mono uppercase">
+              {isDragging ? `${Math.round(height)}px` : 'Resize'}
             </span>
           </div>
         </div>
@@ -969,9 +1207,8 @@ export default function App() {
   const [isGeneratingContext, setIsGeneratingContext] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
   const [isGoogleTranslatingAll, setIsGoogleTranslatingAll] = useState(false);
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notifications, setNotifications] = useState<{ id: string, message: string, type: 'success' | 'error' }[]>([]);
+  const [notifications, setNotifications] = useState<{ id: string; message: string; type: 'success' | 'error' | 'warning' | 'saved' | 'not-saved' }[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [fileName, setFileName] = useState<string>('');
   const [detectedFormat, setDetectedFormat] = useState<string>('');
@@ -980,8 +1217,8 @@ export default function App() {
   const [geminiConnectStatus, setGeminiConnectStatus] = useState<'idle' | 'loading' | 'success' | 'failed'>('idle');
   const [googleConnectStatus, setGoogleConnectStatus] = useState<'idle' | 'loading' | 'success' | 'failed'>('idle');
   const [analyzeStatus, setAnalyzeStatus] = useState<'idle' | 'loading' | 'success' | 'failed'>('idle');
-  const [selectedModel, setSelectedModel] = useState<string>('gemini-3.8-flash');
-  const [customApiKey, setCustomApiKey] = useState<string>('');
+  const [selectedModel, setSelectedModel] = useState<string>('gemini-4-hydrogen');
+  const [geminiApiKey, setGeminiApiKey] = useState<string>(() => getStoredGeminiApiKey());
   const [googleApiKey, setGoogleApiKey] = useState<string>('');
   
   // Performance Settings - balanced concurrency to prevent 429 rate limits & browser hangs
@@ -995,16 +1232,16 @@ export default function App() {
 
   const [sessionId, setSessionId] = useState<string>('');
   
-  // Display & Typography Settings
-  const [translatedFontSize, setTranslatedFontSize] = useState<number>(22);
-  const [originalFontSize, setOriginalFontSize] = useState<number>(14);
-  const [googleFontSize, setGoogleFontSize] = useState<number>(14);
+  // Display & Typography Settings (Compact uniform 13px default across all streams)
+  const [translatedFontSize, setTranslatedFontSize] = useState<number>(13);
+  const [originalFontSize, setOriginalFontSize] = useState<number>(13);
+  const [googleFontSize, setGoogleFontSize] = useState<number>(13);
   const [urduFont, setUrduFont] = useState<string>(URDU_FONT_OPTIONS[0].value);
   const [originalFont, setOriginalFont] = useState<string>(ENGLISH_FONT_OPTIONS[0].value);
   const [googleFont, setGoogleFont] = useState<string>(URDU_FONT_OPTIONS[0].value);
   const [isGlobalFontActive, setIsGlobalFontActive] = useState<boolean>(false);
   const [globalFont, setGlobalFont] = useState<string>(URDU_FONT_OPTIONS[0].value);
-  const [globalFontSize, setGlobalFontSize] = useState<number>(20);
+  const [globalFontSize, setGlobalFontSize] = useState<number>(13);
   const [fontTarget, setFontTarget] = useState<'global' | 'original' | 'ai' | 'google'>('global');
   const [fontsActiveTab, setFontsActiveTab] = useState<'english' | 'urdu' | 'local'>('urdu');
   const [localFonts, setLocalFonts] = useState<CustomFontItem[]>(() => getLocalFontsFromStorage());
@@ -1013,17 +1250,13 @@ export default function App() {
 
   const [isTextResizeOpen, setIsTextResizeOpen] = useState(false);
   const [isFontsOpen, setIsFontsOpen] = useState(false);
-  const [textResizeAlign, setTextResizeAlign] = useState<'left' | 'right'>('left');
-  const [fontsAlign, setFontsAlign] = useState<'left' | 'right'>('left');
-  const [textResizePopoverStyle, setTextResizePopoverStyle] = useState<React.CSSProperties | null>(null);
-  const [fontsPopoverStyle, setFontsPopoverStyle] = useState<React.CSSProperties | null>(null);
   const [previewDisplayMode, setPreviewDisplayMode] = useState<'rendered' | 'plain'>('rendered');
 
   // Draft memory states: settings remain in draft until explicitly applied
-  const [draftOriginalFontSize, setDraftOriginalFontSize] = useState<number>(14);
-  const [draftTranslatedFontSize, setDraftTranslatedFontSize] = useState<number>(22);
-  const [draftGoogleFontSize, setDraftGoogleFontSize] = useState<number>(14);
-  const [draftGlobalFontSize, setDraftGlobalFontSize] = useState<number>(20);
+  const [draftOriginalFontSize, setDraftOriginalFontSize] = useState<number>(13);
+  const [draftTranslatedFontSize, setDraftTranslatedFontSize] = useState<number>(13);
+  const [draftGoogleFontSize, setDraftGoogleFontSize] = useState<number>(13);
+  const [draftGlobalFontSize, setDraftGlobalFontSize] = useState<number>(13);
 
   const [draftOriginalFont, setDraftOriginalFont] = useState<string>(ENGLISH_FONT_OPTIONS[0].value);
   const [draftUrduFont, setDraftUrduFont] = useState<string>(URDU_FONT_OPTIONS[0].value);
@@ -1033,13 +1266,14 @@ export default function App() {
   const [draftFontTarget, setDraftFontTarget] = useState<'global' | 'original' | 'ai' | 'google'>('global');
 
   const [isStylizerOpen, setIsStylizerOpen] = useState(false);
-  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const [translationSettings, setTranslationSettings] = useState<TranslationSettings>(DEFAULT_TRANSLATION_SETTINGS);
   const [isTranslationSettingsModalOpen, setIsTranslationSettingsModalOpen] = useState(false);
   
   // Active Styling Studio Configuration & Live Workspace Preview Toggle
+  // Default theme styling (plain black/white text & basic fonts) stays active until user applies custom style
   const [activeStylingConfig, setActiveStylingConfig] = useState<ActiveStylingConfig>(DEFAULT_STYLING_CONFIG);
-  const [isWorkspaceStylingPreview, setIsWorkspaceStylingPreview] = useState<boolean>(true);
+  const [isWorkspaceStylingPreview, setIsWorkspaceStylingPreview] = useState<boolean>(false);
+  const [hasAppliedCustomStyle, setHasAppliedCustomStyle] = useState<boolean>(false);
 
   // Stable references for high-speed memoized rendering
   const subtitlesRef = useRef(subtitles);
@@ -1054,17 +1288,102 @@ export default function App() {
   const [isGoogleSettingsOpen, setIsGoogleSettingsOpen] = useState(false);
   const [isAiConfigOpen, setIsAiConfigOpen] = useState(false);
   const [isUnifiedDownloadOpen, setIsUnifiedDownloadOpen] = useState(false);
-  const [isAndroidGuideOpen, setIsAndroidGuideOpen] = useState(false);
-  const textResizeRef = useRef<HTMLDivElement>(null);
-  const fontsRef = useRef<HTMLDivElement>(null);
-  const exportMenuRef = useRef<HTMLDivElement>(null);
-  const columnMenuRef = useRef<HTMLDivElement>(null);
-  const workspaceToolsRef = useRef<HTMLDivElement>(null);
-  const [isWorkspaceToolsOpen, setIsWorkspaceToolsOpen] = useState(false);
+
+  // Mobile-First Preferences, 6-Tab Navigation, Drafts, Crash Recovery & Glossary
+  const [preferences, setPreferences] = useState<AppPreferences>(() => loadAppPreferences());
+  const preferencesRef = useRef(preferences);
+  preferencesRef.current = preferences;
+  const [activeTab, setActiveTab] = useState<MobileTab>(() => loadAppPreferences().defaultStartupTab);
+  const [isHomeDrawerOpen, setIsHomeDrawerOpen] = useState(false);
+  const [isTranslatorDrawerOpen, setIsTranslatorDrawerOpen] = useState(false);
+  const [isWorkspaceDrawerOpen, setIsWorkspaceDrawerOpen] = useState(false);
+  const [isOnScreenSlidersOpen, setIsOnScreenSlidersOpen] = useState(false);
+  const [focusedSettingsCategory, setFocusedSettingsCategory] = useState<SettingsCategoryId | null>(null);
+  const [focusedTranslationSub, setFocusedTranslationSub] = useState<TranslationSubMenuId | null>(null);
+  const [hasPendingStyleBake, setHasPendingStyleBake] = useState(false);
+
+  useEffect(() => {
+    setIsHomeDrawerOpen(false);
+    setIsTranslatorDrawerOpen(false);
+    setIsWorkspaceDrawerOpen(false);
+  }, [activeTab]);
+  const [glossary, setGlossary] = useState<GlossaryEntry[]>(() => loadGlossary());
+  const [drafts, setDrafts] = useState<ProjectDraft[]>([]);
+  const [activeDraftId, setActiveDraftId] = useState<string | null>(null);
+  const [crashSnapshot, setCrashSnapshot] = useState<CrashSnapshot | null>(null);
+  const [storageBreakdown, setStorageBreakdown] = useState<DetailedStorageBreakdown>({
+    draftsCount: 0,
+    subtitlesInActive: 0,
+    logsCount: 0,
+    estimatedBytes: 0,
+    localStorageBytes: 0,
+    activeProjectBytes: 0,
+    crashSnapshotBytes: 0,
+    crashSnapshotSavedAt: null,
+    draftItems: [],
+    quotaTotalBytes: null,
+    quotaUsageBytes: null,
+  });
+  const [mobileFocusStream, setMobileFocusStream] = useState<'ai' | 'google' | 'original'>('ai');
+  const [qcFilter, setQcFilter] = useState<'all' | 'issues' | 'high-cps' | 'overlaps' | 'untranslated'>('all');
+  const [isMobileViewport, setIsMobileViewport] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.innerWidth < 1024 : false
+  );
+
   const [isWatermarkModalOpen, setIsWatermarkModalOpen] = useState(false);
 
+  // Shared Yes/No Confirmation Modal State
+  const [confirmDialog, setConfirmDialog] = useState<{
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    cancelLabel?: string;
+    danger?: boolean;
+    onConfirm: () => void;
+  } | null>(null);
+
+  // Floating Field Actions & Column Stream Undo/Redo Popups
+  const [fieldActionMenu, setFieldActionMenu] = useState<{
+    index: number;
+    field: WorkspaceStreamField;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [columnHistoryMenu, setColumnHistoryMenu] = useState<{
+    field: WorkspaceStreamField;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [editTriggerTarget, setEditTriggerTarget] = useState<{
+    index: number;
+    field: WorkspaceStreamField;
+    nonce: number;
+  } | null>(null);
+  const [editorFocusStream, setEditorFocusStream] = useState<WorkspaceStreamField | undefined>(undefined);
+
+  // Per-block Undo / Redo history map (keyed by subtitle.index)
+  const blockHistoryRef = useRef<
+    Map<
+      number,
+      {
+        stack: Array<{ text: string; translatedText?: string; googleTranslateText?: string }>;
+        ptr: number;
+      }
+    >
+  >(new Map());
+  const [blockHistoryVersion, setBlockHistoryVersion] = useState(0);
+
+  // Per-stream Undo / Redo history map ('orig' | 'ai' | 'google')
+  const streamHistoryRef = useRef<Record<WorkspaceStreamField, { stack: string[][]; ptr: number }>>({
+    orig: { stack: [], ptr: -1 },
+    ai: { stack: [], ptr: -1 },
+    google: { stack: [], ptr: -1 },
+  });
+  const isStreamHistoryNavigating = useRef(false);
+  const [streamHistoryVersion, setStreamHistoryVersion] = useState(0);
+
   // Subtitle Editing Modes & Controls: Main page dashboard is read-only
-  const [isReadOnly, setIsReadOnly] = useState<boolean>(true);
+  const [isReadOnly, setIsReadOnly] = useState<boolean>(() => loadAppPreferences().defaultReadOnly);
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
   const [isConfirmingBatchDeleteWorkspace, setIsConfirmingBatchDeleteWorkspace] = useState(false);
 
@@ -1086,8 +1405,9 @@ export default function App() {
     time: true
   });
 
-  const handleOpenEditor = useCallback((index?: number) => {
+  const handleOpenEditor = useCallback((index?: number, stream?: WorkspaceStreamField) => {
     setEditorFocusIndex(index);
+    setEditorFocusStream(stream);
     setIsEditorModalOpen(true);
   }, []);
 
@@ -1103,7 +1423,6 @@ export default function App() {
     ai: true,
     google: true
   });
-  const [isColumnMenuOpen, setIsColumnMenuOpen] = useState(false);
 
   // Advanced Subtitle Editing Modals
   const [isFindReplaceOpen, setIsFindReplaceOpen] = useState(false);
@@ -1123,28 +1442,53 @@ export default function App() {
 
   // Pagination for high-speed rendering (prevents DOM layout recalculation lag)
   const [currentPage, setCurrentPage] = useState<number>(1);
-  const [pageSize, setPageSize] = useState<number>(50); // 25, 50, 100, 0 for all
+  const [pageSize, setPageSize] = useState<number>(() => loadAppPreferences().defaultPageSize); // 25, 50, 100, 0 for all
   const [searchInput, setSearchInput] = useState<string>('');
   const [searchTerm, setSearchTerm] = useState<string>('');
 
-  const [theme, setTheme] = useState<AppTheme>(() => {
-    try {
-      const stored = localStorage.getItem('applet_theme');
-      if (stored && ['classic', 'cinematic', 'cyber', 'neon', 'sapphire', 'amber'].includes(stored)) {
-        return stored as AppTheme;
-      }
-    } catch {}
-    return 'cinematic';
-  });
+  const [theme, setTheme] = useState<AppTheme>(() => loadAppPreferences().theme);
   const [isFullScreen, setIsFullScreen] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving'>('saved');
 
-  const addNotification = useCallback((message: string, type: 'success' | 'error') => {
+  const updatePreferences = useCallback((updater: (prev: AppPreferences) => AppPreferences) => {
+    setPreferences(prev => updater(prev));
+  }, []);
+
+  const handleThemeChange = useCallback((nextTheme: AppTheme) => {
+    setTheme(nextTheme);
+    setPreferences(prev => ({ ...prev, theme: nextTheme }));
+  }, []);
+
+  useEffect(() => {
+    applyPreferencesToDOM(preferences);
+    saveAppPreferences(preferences);
+    if (preferences.theme !== theme) {
+      setTheme(preferences.theme);
+    }
+  }, [preferences, theme]);
+
+  useEffect(() => {
+    saveGlossary(glossary);
+  }, [glossary]);
+
+  useEffect(() => {
+    const onResize = () => setIsMobileViewport(window.innerWidth < 1024);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  const addNotification = useCallback((message: string, type: 'success' | 'error' | 'warning' | 'saved' | 'not-saved') => {
+    const np = preferencesRef.current.notificationPrefs;
+    if (!np.enabled && type !== 'error') return;
+    if (type === 'warning' && !np.showWarnings) return;
+    if ((type === 'saved' || type === 'not-saved') && !np.showSaveAlerts) return;
+
     const id = Math.random().toString(36).substr(2, 9);
-    setNotifications(prev => [...prev, { id, message, type }]);
+    setNotifications(prev => [...prev.slice(-3), { id, message, type }]);
+    const duration = Math.max(1500, Math.min(6000, np.durationMs || 3200));
     setTimeout(() => {
       setNotifications(prev => prev.filter(n => n.id !== id));
-    }, 2000);
+    }, duration);
   }, []);
 
   // Online & Offline connectivity tracking for Android & Web
@@ -1157,7 +1501,7 @@ export default function App() {
     };
     const handleOffline = () => {
       setIsOnline(false);
-      addNotification("Offline Mode: Local editing & exports active", "error");
+      addNotification("Offline Mode: Local editing & exports active", "warning");
     };
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
@@ -1175,7 +1519,7 @@ export default function App() {
       type
     }, ...prev].slice(0, 50));
 
-    if (type === 'success' || type === 'error') {
+    if (type === 'success' || type === 'error' || type === 'warning') {
       addNotification(message, type);
     }
   }, [addNotification]);
@@ -1226,73 +1570,6 @@ export default function App() {
     }
   }, [draftFontTarget]);
 
-  const calculatePopoverPlacement = useCallback((triggerEl: HTMLElement | null, preferredWidth: number): React.CSSProperties => {
-    const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1200;
-    const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 800;
-    const width = Math.min(preferredWidth, Math.max(300, viewportWidth - 24));
-
-    if (!triggerEl) {
-      return {
-        position: 'fixed',
-        top: '100px',
-        left: `${Math.max(12, Math.round((viewportWidth - width) / 2))}px`,
-        width: `${Math.round(width)}px`,
-        maxHeight: `${Math.round(Math.min(viewportHeight - 120, viewportHeight * 0.85))}px`,
-      };
-    }
-
-    const rect = triggerEl.getBoundingClientRect();
-    const buttonCenterX = rect.left + rect.width / 2;
-    let left = buttonCenterX - width / 2;
-
-    // Strict boundary clamping with 12px margin from viewport edges
-    if (left + width > viewportWidth - 12) {
-      left = viewportWidth - width - 12;
-    }
-    if (left < 12) {
-      left = 12;
-    }
-
-    // Default: position below the button
-    let top = rect.bottom + 8;
-    let maxHeight = Math.min(viewportHeight - top - 16, viewportHeight * 0.85);
-
-    // If bottom space is cramped (<300px) and there is ample space above the trigger button:
-    if (maxHeight < 300 && rect.top > 320) {
-      const topAbove = Math.max(12, rect.top - Math.min(580, rect.top - 20) - 8);
-      top = topAbove;
-      maxHeight = rect.top - topAbove - 8;
-    }
-
-    return {
-      position: 'fixed',
-      top: `${Math.round(top)}px`,
-      left: `${Math.round(left)}px`,
-      width: `${Math.round(width)}px`,
-      maxHeight: `${Math.max(260, Math.round(maxHeight))}px`,
-    };
-  }, []);
-
-  const handleToggleTextResize = useCallback(() => {
-    if (!isTextResizeOpen) {
-      if (textResizeRef.current) {
-        const rect = textResizeRef.current.getBoundingClientRect();
-        const shouldAlignRight = (rect.left + 500 > window.innerWidth - 20) || (rect.left > window.innerWidth / 2);
-        setTextResizeAlign(shouldAlignRight ? 'right' : 'left');
-        setTextResizePopoverStyle(calculatePopoverPlacement(textResizeRef.current, 520));
-      }
-      setDraftOriginalFontSize(originalFontSize);
-      setDraftTranslatedFontSize(translatedFontSize);
-      setDraftGoogleFontSize(googleFontSize);
-      setDraftGlobalFontSize(globalFontSize);
-      setIsTextResizeOpen(true);
-      setIsFontsOpen(false);
-      setIsColumnMenuOpen(false);
-    } else {
-      setIsTextResizeOpen(false);
-    }
-  }, [isTextResizeOpen, originalFontSize, translatedFontSize, googleFontSize, globalFontSize, calculatePopoverPlacement]);
-
   const handleApplyTextResize = useCallback(() => {
     setOriginalFontSize(draftOriginalFontSize);
     setTranslatedFontSize(draftTranslatedFontSize);
@@ -1310,28 +1587,6 @@ export default function App() {
     setDraftGlobalFontSize(globalFontSize);
     setIsTextResizeOpen(false);
   }, [originalFontSize, translatedFontSize, googleFontSize, globalFontSize]);
-
-  const handleToggleFonts = useCallback(() => {
-    if (!isFontsOpen) {
-      if (fontsRef.current) {
-        const rect = fontsRef.current.getBoundingClientRect();
-        const shouldAlignRight = (rect.left + 540 > window.innerWidth - 20) || (rect.left > window.innerWidth / 2);
-        setFontsAlign(shouldAlignRight ? 'right' : 'left');
-        setFontsPopoverStyle(calculatePopoverPlacement(fontsRef.current, 620));
-      }
-      setDraftOriginalFont(originalFont);
-      setDraftUrduFont(urduFont);
-      setDraftGoogleFont(googleFont);
-      setDraftGlobalFont(globalFont);
-      setDraftIsGlobalFontActive(isGlobalFontActive);
-      setDraftFontTarget(fontTarget);
-      setIsFontsOpen(true);
-      setIsTextResizeOpen(false);
-      setIsColumnMenuOpen(false);
-    } else {
-      setIsFontsOpen(false);
-    }
-  }, [isFontsOpen, originalFont, urduFont, googleFont, globalFont, isGlobalFontActive, fontTarget, calculatePopoverPlacement]);
 
   const handleApplyFonts = useCallback(() => {
     setIsGlobalFontActive(draftIsGlobalFontActive);
@@ -1421,18 +1676,38 @@ export default function App() {
     addNotification('Custom font removed', 'success');
   }, [localFonts, addNotification]);
 
+  const resetStreamHistory = useCallback((items: SubtitleItem[]) => {
+    streamHistoryRef.current = {
+      orig: { stack: [items.map(s => s.text || '')], ptr: 0 },
+      ai: { stack: [items.map(s => s.translatedText || '')], ptr: 0 },
+      google: { stack: [items.map(s => s.googleTranslateText || '')], ptr: 0 },
+    };
+    setStreamHistoryVersion(v => v + 1);
+  }, []);
+
   const loadSampleSubtitles = useCallback(() => {
     setSubtitles(DEMO_SAMPLE_SUBTITLES);
+    historyRef.current = [DEMO_SAMPLE_SUBTITLES];
+    historyIndexRef.current = 0;
     setHistory([DEMO_SAMPLE_SUBTITLES]);
     setHistoryIndex(0);
+    blockHistoryRef.current.clear();
+    setBlockHistoryVersion(v => v + 1);
+    resetStreamHistory(DEMO_SAMPLE_SUBTITLES);
     setOriginalTimingMap(createOriginalTimingMap(DEMO_SAMPLE_SUBTITLES));
+    setActiveDraftId(null);
+    setHasAppliedCustomStyle(false);
+    setIsWorkspaceStylingPreview(false);
     setFileName('cinematic_demo_subtitles.srt');
     setDetectedFormat('Demo Subtitles (.srt)');
-    // Ensure all 3 text columns are visible
+    setQcFilter('all');
     setVisibleColumns(prev => ({ ...prev, original: true, ai: true, google: true }));
+    dbService.clearCrashSnapshot().catch(() => {});
+    setCrashSnapshot(null);
+    setActiveTab('workspace');
     addLog('Loaded 4 cinematic demo subtitle segments with Original, AI Urdu, and Google translation streams.', 'success');
     addNotification('Loaded demo subtitle project', 'success');
-  }, [addLog, addNotification]);
+  }, [addLog, addNotification, resetStreamHistory]);
 
   const geminiRef = useRef<GeminiService | null>(null);
   const stopGeminiRef = useRef(false);
@@ -1440,24 +1715,92 @@ export default function App() {
   const geminiAbortControllerRef = useRef<AbortController | null>(null);
   const googleAbortControllerRef = useRef<AbortController | null>(null);
 
+  const refreshDraftsAndStats = useCallback(async () => {
+    try {
+      const [loadedDrafts, breakdownData] = await Promise.all([
+        dbService.listDrafts(),
+        dbService.getDetailedStorageBreakdown(),
+      ]);
+      setDrafts(loadedDrafts);
+      setStorageBreakdown(breakdownData);
+    } catch (e) {
+      console.error('Failed to refresh drafts/stats', e);
+    }
+  }, []);
+
   // Persistence: Load
   useEffect(() => {
     const loadData = async () => {
       try {
-        const saved = await dbService.loadState();
+        const hasPrefsStored = Boolean(localStorage.getItem('urdu_dubber_app_prefs_v1'));
+        const [saved, loadedDrafts, loadedCrash, breakdownData] = await Promise.all([
+          dbService.loadState(),
+          dbService.listDrafts().catch(() => []),
+          dbService.loadCrashSnapshot().catch(() => null),
+          dbService.getDetailedStorageBreakdown().catch(() => ({
+            draftsCount: 0,
+            subtitlesInActive: 0,
+            logsCount: 0,
+            estimatedBytes: 0,
+            localStorageBytes: 0,
+            activeProjectBytes: 0,
+            crashSnapshotBytes: 0,
+            crashSnapshotSavedAt: null,
+            draftItems: [],
+            quotaTotalBytes: null,
+            quotaUsageBytes: null,
+          })),
+        ]);
+        setDrafts(loadedDrafts);
+        setStorageBreakdown(breakdownData);
+
+        const normalizeModel = (m?: string) => {
+          if (!m || m === 'gemini-3.8-flash' || m === 'gemini-flash-latest' || m === 'gemini-pro' || m.startsWith('gemini-1.5') || m.startsWith('gemini-2.0')) {
+            return 'gemini-4-hydrogen';
+          }
+          return m;
+        };
+
+        if (loadedCrash && loadedCrash.subtitles && loadedCrash.subtitles.length > 0) {
+          const savedSubs = saved?.subtitles || [];
+          const sameLength = savedSubs.length === loadedCrash.subtitles.length;
+          const sameFile = (saved?.fileName || 'Untitled Project') === (loadedCrash.fileName || 'Untitled Project');
+          const firstSaved = savedSubs[0];
+          const lastSaved = savedSubs[savedSubs.length - 1];
+          const firstCrash = loadedCrash.subtitles[0];
+          const lastCrash = loadedCrash.subtitles[loadedCrash.subtitles.length - 1];
+          const matchesSavedCleanly =
+            sameLength &&
+            sameFile &&
+            firstSaved?.text === firstCrash?.text &&
+            firstSaved?.translatedText === firstCrash?.translatedText &&
+            lastSaved?.text === lastCrash?.text &&
+            lastSaved?.translatedText === lastCrash?.translatedText;
+
+          if (!matchesSavedCleanly) {
+            setCrashSnapshot(loadedCrash);
+          } else {
+            dbService.clearCrashSnapshot().catch(() => {});
+          }
+        }
+
         if (saved) {
           if (saved.subtitles) {
             setSubtitles(saved.subtitles);
+            historyRef.current = [saved.subtitles];
+            historyIndexRef.current = 0;
             setHistory([saved.subtitles]);
             setHistoryIndex(0);
+            resetStreamHistory(saved.subtitles);
             setOriginalTimingMap(createOriginalTimingMap(saved.subtitles));
           }
+          if (saved.activeDraftId !== undefined) setActiveDraftId(saved.activeDraftId ?? null);
           if (saved.context) setContext(saved.context);
           if (saved.customPrompt) setCustomPrompt(saved.customPrompt);
           if (saved.logs) setLogs(saved.logs);
           if (saved.fileName) setFileName(saved.fileName);
-          if (saved.selectedModel) setSelectedModel(saved.selectedModel);
-          if (saved.customApiKey) setCustomApiKey(saved.customApiKey);
+          if (saved.detectedFormat) setDetectedFormat(saved.detectedFormat);
+          if (saved.selectedModel) setSelectedModel(normalizeModel(saved.selectedModel));
           if (saved.googleApiKey) setGoogleApiKey(saved.googleApiKey);
           if (saved.geminiBatchSize) setGeminiBatchSize(saved.geminiBatchSize);
           if (saved.googleBatchSize) setGoogleBatchSize(saved.googleBatchSize);
@@ -1473,19 +1816,24 @@ export default function App() {
           if ((saved as any).isGlobalFontActive !== undefined) setIsGlobalFontActive((saved as any).isGlobalFontActive);
           if ((saved as any).globalFont) setGlobalFont((saved as any).globalFont);
           if ((saved as any).globalFontSize) setGlobalFontSize((saved as any).globalFontSize);
-          if ((saved as any).theme) {
+          if (!hasPrefsStored && (saved as any).theme) {
             const savedTh = (saved as any).theme;
-            if (savedTh === 'light') setTheme('classic');
-            else if (savedTh === 'dark') setTheme('cinematic');
-            else setTheme(savedTh as AppTheme);
+            const resolvedTheme: AppTheme = savedTh === 'light' ? 'classic' : savedTh === 'dark' ? 'cinematic' : (savedTh as AppTheme);
+            setTheme(resolvedTheme);
+            setPreferences(prev => ({ ...prev, theme: resolvedTheme }));
           }
           if ((saved as any).activeStylingConfig) {
             setActiveStylingConfig(prev => ({ ...prev, ...(saved as any).activeStylingConfig }));
           }
-          if ((saved as any).isWorkspaceStylingPreview !== undefined) {
-            setIsWorkspaceStylingPreview(Boolean((saved as any).isWorkspaceStylingPreview));
-          }
-          if ((saved as any).isReadOnly !== undefined) {
+          const savedCustomFlag = Boolean((saved as any).hasAppliedCustomStyle);
+          const hasAnyTaggedSubs = Boolean(
+            saved.subtitles?.some((s: SubtitleItem) => hasFormatting(s.translatedText || s.text || ''))
+          );
+          setHasAppliedCustomStyle(savedCustomFlag);
+          setIsWorkspaceStylingPreview(
+            savedCustomFlag || (Boolean((saved as any).isWorkspaceStylingPreview) && hasAnyTaggedSubs)
+          );
+          if (!hasPrefsStored && (saved as any).isReadOnly !== undefined) {
             setIsReadOnly(Boolean((saved as any).isReadOnly));
           }
           if ((saved as any).studioColumnsToDisplay) {
@@ -1497,7 +1845,7 @@ export default function App() {
           if ((saved as any).fontsActiveTab) {
             setFontsActiveTab((saved as any).fontsActiveTab);
           }
-          if ((saved as any).pageSize !== undefined) {
+          if (!hasPrefsStored && (saved as any).pageSize !== undefined) {
             setPageSize((saved as any).pageSize);
           }
           if (saved.visibleColumns) {
@@ -1556,8 +1904,8 @@ export default function App() {
         customPrompt, 
         logs, 
         fileName, 
+        detectedFormat,
         selectedModel, 
-        customApiKey, 
         googleApiKey,
         geminiBatchSize,
         googleBatchSize,
@@ -1579,6 +1927,8 @@ export default function App() {
         theme,
         activeStylingConfig,
         isWorkspaceStylingPreview,
+        hasAppliedCustomStyle,
+        activeDraftId,
         isReadOnly,
         studioColumnsToDisplay,
         fontTarget,
@@ -1597,6 +1947,7 @@ export default function App() {
       } catch (e) {
         console.error("Failed to save state", e);
         setSaveStatus('saved');
+        addNotification("Project auto-save failed — check storage space", "not-saved");
       }
     }, 1000); // Save after 1 second of inactivity
 
@@ -1608,8 +1959,8 @@ export default function App() {
     customPrompt, 
     logs, 
     fileName, 
+    detectedFormat,
     selectedModel, 
-    customApiKey, 
     googleApiKey, 
     geminiBatchSize, 
     googleBatchSize, 
@@ -1630,6 +1981,8 @@ export default function App() {
     theme,
     activeStylingConfig,
     isWorkspaceStylingPreview,
+    hasAppliedCustomStyle,
+    activeDraftId,
     isReadOnly,
     studioColumnsToDisplay,
     fontTarget,
@@ -1637,65 +1990,190 @@ export default function App() {
     pageSize
   ]);
 
-  const connectGemini = async () => {
-    if (geminiConnectStatus === 'loading') return;
+  // Crash-Safe Live Recovery Auto-Save (throttled + pagehide/visibilitychange flush)
+  const latestSnapshotRef = useRef<{
+    subtitles: SubtitleItem[];
+    fileName: string;
+    detectedFormat: string;
+    context: string;
+    customPrompt: string;
+  }>({ subtitles: [], fileName: '', detectedFormat: '', context: '', customPrompt: '' });
+
+  latestSnapshotRef.current = { subtitles, fileName, detectedFormat, context, customPrompt };
+
+  useEffect(() => {
+    if (!isLoaded || !preferences.optionalFeatures.autoSaveDrafts || subtitles.length === 0) return;
+    const timer = setTimeout(() => {
+      dbService.saveCrashSnapshot({
+        savedAt: new Date().toISOString(),
+        fileName: fileName || 'Untitled Project',
+        detectedFormat,
+        subtitles,
+        context,
+        customPrompt,
+      }).catch(() => {});
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [isLoaded, preferences.optionalFeatures.autoSaveDrafts, subtitles, fileName, detectedFormat, context, customPrompt]);
+
+  useEffect(() => {
+    const flushRecovery = () => {
+      const cur = latestSnapshotRef.current;
+      if (!preferences.optionalFeatures.autoSaveDrafts || cur.subtitles.length === 0) return;
+      dbService.saveCrashSnapshot({
+        savedAt: new Date().toISOString(),
+        fileName: cur.fileName || 'Untitled Project',
+        detectedFormat: cur.detectedFormat,
+        subtitles: cur.subtitles,
+        context: cur.context,
+        customPrompt: cur.customPrompt,
+      }).catch(() => {});
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') flushRecovery();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('pagehide', flushRecovery);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('pagehide', flushRecovery);
+    };
+  }, [preferences.optionalFeatures.autoSaveDrafts]);
+
+  const connectGemini = useCallback(async (overrideModel?: string, overrideKey?: string) => {
+    if (geminiConnectStatus === 'loading') return false;
     setGeminiConnectStatus('loading');
     try {
-      const apiKey = (customApiKey?.trim()) || (process.env.GEMINI_API_KEY as string);
-      if (!apiKey) {
-        setError("Gemini API Key missing. Please provide your Gemini API key in Settings.");
+      const safeOverrideModel = typeof overrideModel === 'string' ? overrideModel : undefined;
+      const effectiveModel = safeOverrideModel || selectedModel;
+      if (safeOverrideModel && safeOverrideModel !== selectedModel) {
+        setSelectedModel(safeOverrideModel);
+      }
+      const effectiveKey = typeof overrideKey === 'string' ? overrideKey.trim() : getStoredGeminiApiKey();
+
+      const status = await GeminiService.checkServerStatus(effectiveKey);
+      if (!status.connected) {
+        setError(status.error || "Gemini server is unavailable. Check GEMINI_API_KEY in Settings > Secrets.");
+        setIsGeminiConnected(false);
         setGeminiConnectStatus('failed');
+        setTimeout(() => setGeminiConnectStatus('idle'), 3000);
         return false;
       }
-      geminiRef.current = new GeminiService(apiKey, selectedModel);
+      geminiRef.current = new GeminiService(effectiveModel, effectiveKey);
       setIsGeminiConnected(true);
       setGeminiConnectStatus('success');
-      addLog(`Gemini Connected: ${selectedModel}`, "success");
+      addLog(
+        `Gemini Connected (${status.mode === 'direct' ? 'local key' : 'server'}): ${effectiveModel}`,
+        "success"
+      );
       setError(null);
       setTimeout(() => setGeminiConnectStatus('idle'), 3000);
       return true;
     } catch (e: any) {
-      const is403 = /403|PERMISSION_DENIED|unregistered/i.test(e?.message || '');
-      const errMsg = is403 
-        ? "403 Forbidden: API key invalid or lacks model permissions. Please check your API key in Settings."
-        : `Failed to connect to Gemini: ${e?.message || 'Unknown error'}`;
+      const errMsg = `Failed to connect to Gemini server: ${e?.message || 'Unknown error'}`;
       setError(errMsg);
       setIsGeminiConnected(false);
       setGeminiConnectStatus('failed');
       setTimeout(() => setGeminiConnectStatus('idle'), 3000);
       return false;
     }
-  };
+  }, [geminiConnectStatus, selectedModel, addLog]);
+
+  const handleApplyGeminiApiKey = useCallback(async (rawKey?: string) => {
+    const trimmed = (rawKey !== undefined ? rawKey : geminiApiKey).trim();
+    setGeminiApiKey(trimmed);
+    if (trimmed) {
+      setStoredGeminiApiKey(trimmed);
+    } else {
+      clearStoredGeminiApiKey();
+    }
+    if (geminiRef.current) {
+      geminiRef.current.updateConfig(selectedModel, trimmed);
+    }
+    const ok = await connectGemini(selectedModel, trimmed);
+    if (ok) {
+      addNotification(trimmed ? 'Gemini API key verified & active!' : 'Switched to Gemini server proxy', 'success');
+    } else {
+      addNotification('Gemini connection failed — check key or network', 'error');
+    }
+  }, [geminiApiKey, selectedModel, connectGemini, addNotification]);
+
+  useEffect(() => {
+    let cancelled = false;
+    GeminiService.checkServerStatus()
+      .then((status) => {
+        if (cancelled) return;
+        if (status.connected) {
+          if (!geminiRef.current) {
+            geminiRef.current = new GeminiService(selectedModel);
+          }
+          setIsGeminiConnected(true);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (geminiRef.current) {
+      geminiRef.current.updateConfig(selectedModel);
+    }
+  }, [selectedModel]);
 
   const ensureGeminiConnected = async () => {
-    if (geminiRef.current && isGeminiConnected) return true;
+    if (geminiRef.current && isGeminiConnected) {
+      geminiRef.current.updateConfig(selectedModel);
+      return true;
+    }
     return await connectGemini();
   };
 
-  const updateGeminiConfig = () => {
+  const updateGeminiConfig = (newModel?: string) => {
+    const modelToUse = newModel || selectedModel;
     if (!geminiRef.current) {
-      connectGemini();
+      void connectGemini(modelToUse);
       return;
     }
     try {
-      geminiRef.current.updateConfig(customApiKey || (process.env.GEMINI_API_KEY as string), selectedModel);
-      addLog(`Gemini config updated: ${selectedModel}`, "success");
+      geminiRef.current.updateConfig(modelToUse);
+      addLog(`Gemini config updated: ${modelToUse}`, "success");
       setError(null);
     } catch (e) {
       setError("Failed to update Gemini configuration.");
     }
   };
 
-  const updateGoogleConfig = () => {
+  const updateGoogleConfig = async (overrideKey?: string) => {
     setGoogleConnectStatus('loading');
-    if (googleApiKey) {
-      addLog("Google Cloud Translate API Key activated.", "success");
-      setGoogleConnectStatus('success');
-    } else {
-      addLog("Google Cloud Translate API Key cleared.", "warning");
-      setGoogleConnectStatus('idle');
+    const safeOverrideKey = typeof overrideKey === 'string' ? overrideKey : undefined;
+    const keyToTest = (safeOverrideKey !== undefined ? safeOverrideKey : googleApiKey)?.trim() || '';
+    if (safeOverrideKey !== undefined && safeOverrideKey.trim() !== googleApiKey) {
+      setGoogleApiKey(safeOverrideKey.trim());
     }
-    setTimeout(() => setGoogleConnectStatus('idle'), 3000);
+    try {
+      const probe = await translateTextGoogle(
+        'Hello',
+        keyToTest || undefined,
+        undefined,
+        translationSettingsRef.current,
+        preferencesRef.current.googleRoutingMode
+      );
+      if (probe && probe !== 'Translation Error') {
+        addLog(keyToTest ? 'Google Cloud Translate API key verified & active.' : 'Free Google Translate endpoint verified & active.', 'success');
+        addNotification(keyToTest ? 'Google Cloud key verified!' : 'Free Google Translate endpoint active!', 'success');
+        setGoogleConnectStatus('success');
+      } else {
+        throw new Error('Unexpected response from translation endpoint.');
+      }
+    } catch (err: any) {
+      addLog(`Google Translate check failed: ${err?.message || err}`, 'error');
+      addNotification(`Google verify failed: ${err?.message || 'Check key or connection'}`, 'error');
+      setGoogleConnectStatus('failed');
+    } finally {
+      setTimeout(() => setGoogleConnectStatus('idle'), 3000);
+    }
   };
 
   const stats = useMemo(() => {
@@ -1707,44 +2185,89 @@ export default function App() {
     return { total, translated, google, progress, googleProgress };
   }, [subtitles]);
 
-  // Centralized subtitle state updater that records Undo/Redo history
-  const updateSubtitles = useCallback((newSubsOrUpdater: SubtitleItem[] | ((prev: SubtitleItem[]) => SubtitleItem[])) => {
-    setSubtitles(prev => {
-      const nextSubs = typeof newSubsOrUpdater === 'function' ? newSubsOrUpdater(prev) : newSubsOrUpdater;
-      if (!isHistoryNavigating.current) {
-        setHistory(h => {
-          const nextH = h.slice(0, historyIndex + 1);
-          if (nextH.length > 50) nextH.shift();
-          return [...nextH, nextSubs];
-        });
-        setHistoryIndex(prevIdx => Math.min(prevIdx + 1, 50));
+  const hasAnySubtitlesInApp = subtitles.length > 0 || drafts.length > 0;
+
+  // Ref mirrors for atomic Undo/Redo history updates
+  const historyRef = useRef<SubtitleItem[][]>([]);
+  const historyIndexRef = useRef<number>(-1);
+
+  // Record per-stream changes cleanly (skipping no-ops)
+  const recordStreamChanges = useCallback((prevSubs: SubtitleItem[], nextSubs: SubtitleItem[]) => {
+    if (isStreamHistoryNavigating.current) return;
+    let changedAny = false;
+    const fields: WorkspaceStreamField[] = ['orig', 'ai', 'google'];
+    const extract = (arr: SubtitleItem[], f: WorkspaceStreamField) =>
+      arr.map(s => (f === 'orig' ? (s.text || '') : f === 'ai' ? (s.translatedText || '') : (s.googleTranslateText || '')));
+
+    for (const f of fields) {
+      const prevArr = extract(prevSubs, f);
+      const nextArr = extract(nextSubs, f);
+      const changed =
+        prevArr.length !== nextArr.length || prevArr.some((val, idx) => val !== nextArr[idx]);
+      if (!changed) continue;
+      changedAny = true;
+      const entry = streamHistoryRef.current[f];
+      if (entry.stack.length === 0 || entry.ptr < 0) {
+        entry.stack = [prevArr, nextArr];
+        entry.ptr = 1;
+      } else {
+        const sliced = entry.stack.slice(0, entry.ptr + 1);
+        sliced.push(nextArr);
+        if (sliced.length > 40) sliced.shift();
+        entry.stack = sliced;
+        entry.ptr = sliced.length - 1;
       }
-      return nextSubs;
-    });
-  }, [historyIndex]);
+    }
+    if (changedAny) {
+      setStreamHistoryVersion(v => v + 1);
+    }
+  }, []);
+
+  // Centralized subtitle state updater that records Undo/Redo history atomically
+  const updateSubtitles = useCallback((newSubsOrUpdater: SubtitleItem[] | ((prev: SubtitleItem[]) => SubtitleItem[])) => {
+    const prev = subtitlesRef.current;
+    const nextSubs = typeof newSubsOrUpdater === 'function' ? newSubsOrUpdater(prev) : newSubsOrUpdater;
+    subtitlesRef.current = nextSubs;
+    setSubtitles(nextSubs);
+
+    if (!isHistoryNavigating.current) {
+      const sliced = historyRef.current.slice(0, historyIndexRef.current + 1);
+      const nextHistory = [...sliced, nextSubs];
+      if (nextHistory.length > 50) nextHistory.shift();
+      historyRef.current = nextHistory;
+      historyIndexRef.current = nextHistory.length - 1;
+      setHistory(nextHistory);
+      setHistoryIndex(nextHistory.length - 1);
+      recordStreamChanges(prev, nextSubs);
+    }
+  }, [recordStreamChanges]);
 
   // Undo / Redo Handlers
   const handleUndo = useCallback(() => {
-    if (historyIndex > 0) {
+    if (historyIndexRef.current > 0) {
       isHistoryNavigating.current = true;
-      const targetState = history[historyIndex - 1];
+      const nextIdx = historyIndexRef.current - 1;
+      const targetState = historyRef.current[nextIdx];
+      historyIndexRef.current = nextIdx;
+      setHistoryIndex(nextIdx);
       setSubtitles(targetState);
-      setHistoryIndex(historyIndex - 1);
       addNotification("Undo applied", "success");
       setTimeout(() => { isHistoryNavigating.current = false; }, 50);
     }
-  }, [historyIndex, history, addNotification]);
+  }, [addNotification]);
 
   const handleRedo = useCallback(() => {
-    if (historyIndex < history.length - 1) {
+    if (historyIndexRef.current < historyRef.current.length - 1) {
       isHistoryNavigating.current = true;
-      const targetState = history[historyIndex + 1];
+      const nextIdx = historyIndexRef.current + 1;
+      const targetState = historyRef.current[nextIdx];
+      historyIndexRef.current = nextIdx;
+      setHistoryIndex(nextIdx);
       setSubtitles(targetState);
-      setHistoryIndex(historyIndex + 1);
       addNotification("Redo applied", "success");
       setTimeout(() => { isHistoryNavigating.current = false; }, 50);
     }
-  }, [historyIndex, history, addNotification]);
+  }, [addNotification]);
 
   // Synchronize baseline original timing map whenever subtitles are loaded or imported
   useEffect(() => {
@@ -1769,16 +2292,68 @@ export default function App() {
     addLog(`Reset ${resetCount} subtitle blocks back to original timestamps.`, "success");
   }, [originalTimingMap, subtitles, updateSubtitles, addNotification, addLog]);
 
-  // Search filtering & pagination
+  // Subtitle Quality Control (QC) Inspector Map
+  const qcAnalysis = useMemo(() => {
+    const map = new Map<number, SubtitleQcIssue>();
+    let highCpsCount = 0;
+    let overlapCount = 0;
+    let untranslatedCount = 0;
+    let totalIssues = 0;
+
+    for (let i = 0; i < subtitles.length; i++) {
+      const sub = subtitles[i];
+      const { durationSec, cps } = calculateDurationAndCPS(sub.translatedText || sub.text, sub.startTime, sub.endTime);
+      const highCps = cps > 25;
+      const shortDuration = durationSec > 0 && durationSec < 0.7;
+      const emptyTranslation = !sub.translatedText || sub.translatedText.trim().length === 0;
+      let overlapWithNext = false;
+      if (i < subtitles.length - 1) {
+        const endMs = timeStringToMs(sub.endTime);
+        const nextStartMs = timeStringToMs(subtitles[i + 1].startTime);
+        if (endMs > nextStartMs) overlapWithNext = true;
+      }
+
+      if (highCps) highCpsCount++;
+      if (overlapWithNext) overlapCount++;
+      if (emptyTranslation) untranslatedCount++;
+      if (highCps || overlapWithNext || shortDuration || emptyTranslation) totalIssues++;
+
+      map.set(sub.index, {
+        highCps,
+        emptyTranslation,
+        overlapWithNext,
+        shortDuration,
+        cps,
+        durationSec,
+      });
+    }
+    return { map, highCpsCount, overlapCount, untranslatedCount, totalIssues };
+  }, [subtitles]);
+
+  // Search filtering & QC filtering & pagination
   const filteredSubtitles = useMemo(() => {
-    if (!searchTerm) return subtitles;
-    const lowSearch = searchTerm.toLowerCase();
-    return subtitles.filter(s => 
-      s.text.toLowerCase().includes(lowSearch) || 
-      (s.translatedText && s.translatedText.toLowerCase().includes(lowSearch)) ||
-      (s.googleTranslateText && s.googleTranslateText.toLowerCase().includes(lowSearch))
-    );
-  }, [subtitles, searchTerm]);
+    let base = subtitles;
+    if (searchTerm) {
+      const lowSearch = searchTerm.toLowerCase();
+      base = base.filter(s =>
+        s.text.toLowerCase().includes(lowSearch) ||
+        (s.translatedText && s.translatedText.toLowerCase().includes(lowSearch)) ||
+        (s.googleTranslateText && s.googleTranslateText.toLowerCase().includes(lowSearch))
+      );
+    }
+    if (preferences.optionalFeatures.enableQcInspector && qcFilter !== 'all') {
+      base = base.filter(s => {
+        const qc = qcAnalysis.map.get(s.index);
+        if (!qc) return false;
+        if (qcFilter === 'issues') return qc.highCps || qc.overlapWithNext || qc.shortDuration || qc.emptyTranslation;
+        if (qcFilter === 'high-cps') return qc.highCps;
+        if (qcFilter === 'overlaps') return qc.overlapWithNext;
+        if (qcFilter === 'untranslated') return qc.emptyTranslation;
+        return true;
+      });
+    }
+    return base;
+  }, [subtitles, searchTerm, preferences.optionalFeatures.enableQcInspector, qcFilter, qcAnalysis.map]);
 
   const totalPages = useMemo(() => {
     if (pageSize === 0) return 1;
@@ -1842,10 +2417,13 @@ export default function App() {
     
     try {
       setIsTranslating(true);
+      const effectiveCustomPrompt = preferences.optionalFeatures.enableTermGlossary
+        ? `${customPrompt}${buildGlossaryInstruction(glossary)}`
+        : customPrompt;
       const results = await geminiRef.current!.translateBatch(
         targetItems.map(item => ({ index: item.index, text: stripFormatting(item.text) })),
         context,
-        customPrompt,
+        effectiveCustomPrompt,
         undefined,
         translationSettings
       );
@@ -1876,7 +2454,8 @@ export default function App() {
         googleApiKey,
         undefined,
         geminiRef.current || undefined,
-        translationSettings
+        translationSettings,
+        preferencesRef.current.googleRoutingMode
       );
       
       if (results && results.length > 0) {
@@ -1963,11 +2542,23 @@ export default function App() {
         return;
       }
       setSubtitles(items);
+      historyRef.current = [items];
+      historyIndexRef.current = 0;
       setHistory([items]);
       setHistoryIndex(0);
+      blockHistoryRef.current.clear();
+      setBlockHistoryVersion(v => v + 1);
+      resetStreamHistory(items);
       setOriginalTimingMap(createOriginalTimingMap(items));
+      setActiveDraftId(null);
+      setHasAppliedCustomStyle(false);
+      setIsWorkspaceStylingPreview(false);
       setSelectedIndices(new Set());
       setDetectedFormat(detectedFmt);
+      setQcFilter('all');
+      dbService.clearCrashSnapshot().catch(() => {});
+      setCrashSnapshot(null);
+      setActiveTab('workspace');
       addLog(`Successfully loaded ${items.length} entries from ${detectedFmt}.`, "success");
       addNotification(`Loaded ${items.length} segments (${detectedFmt})`, "success");
     };
@@ -1981,30 +2572,48 @@ export default function App() {
     }
   };
 
-  const analyzeSubtitles = async () => {
+  const analyzeSubtitles = async (): Promise<string | null> => {
     if (!(await ensureGeminiConnected())) {
       addLog("Please connect Gemini first.", "warning");
-      return;
+      addNotification("Gemini server not connected.", "error");
+      return null;
     }
     if (subtitles.length === 0) {
       addLog("No subtitles to analyze.", "warning");
-      return;
+      addNotification("Load a subtitle file before analyzing.", "warning");
+      return null;
     }
+    const sample = subtitles
+      .slice(0, 100)
+      .map(s => stripFormatting(s.text || ''))
+      .filter(Boolean)
+      .join('\n');
+    if (!sample.trim()) {
+      addLog("No readable subtitle dialogue found to analyze.", "warning");
+      addNotification("No subtitle dialogue text found to analyze.", "warning");
+      return null;
+    }
+
     setIsGeneratingContext(true);
     setAnalyzeStatus('loading');
     addLog("Analyzing subtitles for cultural context...", "info");
     try {
-      // Use a sample of subtitles for context generation
-      const sample = subtitles.slice(0, 100).map(s => s.text).join('\n');
-      const generatedContext = await geminiRef.current.generateContext(sample);
+      const generatedContext = (await geminiRef.current.generateContext(sample)).trim();
+      if (!generatedContext || generatedContext === "No context generated.") {
+        throw new Error("No context text generated.");
+      }
       setContext(generatedContext);
       addLog("Context analysis complete.", "success");
       setAnalyzeStatus('success');
       setTimeout(() => setAnalyzeStatus('idle'), 3000);
+      return generatedContext;
     } catch (err: any) {
-      addLog(`Analysis failed: ${err.message}`, "error");
+      const msg = err?.message || "Context analysis failed";
+      addLog(`Analysis failed: ${msg}`, "error");
+      addNotification(`Analysis failed: ${msg}`, "error");
       setAnalyzeStatus('failed');
       setTimeout(() => setAnalyzeStatus('idle'), 3000);
+      return null;
     } finally {
       setIsGeneratingContext(false);
     }
@@ -2017,33 +2626,33 @@ export default function App() {
     }
     if (isTranslating) return;
 
-    // Pre-execution Feasibility Check
+    // Pre-execution Feasibility Check (non-blocking warning instead of window.confirm)
     const feasibility = quotaManager.analyzeFeasibility(
       subtitles, 
       geminiBatchSize, 
       Boolean(context && context.length > 50)
     );
     if (!feasibility.isFeasible && feasibility.status === 'insufficient') {
-      const proceed = confirm(
-        `⚠️ Pre-Execution Feasibility Alert:\n\nFile requires ~${feasibility.estimatedRequests} API requests, but only ${feasibility.remainingDailyRequests} requests remain in today's quota.\n\nDo you want to proceed anyway?`
+      addLog(
+        `Quota Warning: File needs ~${feasibility.estimatedRequests} requests; ~${feasibility.remainingDailyRequests} estimated remaining today.`,
+        "warning"
       );
-      if (!proceed) {
-        addLog("Translation cancelled by user due to quota feasibility check.", "warning");
-        return;
-      }
+      addNotification(`Quota tight (~${feasibility.remainingDailyRequests} left today). Running with safety throttle.`, "error");
     }
 
-    // Enforce context analysis
-    if (!context || context.length < 50) {
+    // Enforce context analysis using return value (avoid React stale closure)
+    let activeContext = context;
+    if (!activeContext || activeContext.length < 50) {
       addLog("Context analysis required before translation. Analyzing now...", "warning");
-      await analyzeSubtitles();
-      // If analysis failed or returned empty, stop
-      if (!context || context.length < 50) {
+      const analyzed = await analyzeSubtitles();
+      if (!analyzed || analyzed.length < 20) {
         addLog("Context analysis failed. Please provide context manually or try again.", "error");
         return;
       }
+      activeContext = analyzed;
     }
 
+    const subsBeforeTranslation = subtitlesRef.current;
     setIsTranslating(true);
     stopGeminiRef.current = false;
     geminiAbortControllerRef.current = new AbortController();
@@ -2061,6 +2670,9 @@ export default function App() {
     const workerCount = geminiWorkers;
     const queue = [...itemsToTranslate];
     const BATCH_SIZE = geminiBatchSize;
+    const effectiveCustomPrompt = preferences.optionalFeatures.enableTermGlossary
+      ? `${customPrompt}${buildGlossaryInstruction(glossary)}`
+      : customPrompt;
 
     const initialWorkerStates: Record<string, any> = {};
     for (let i = 0; i < workerCount; i++) {
@@ -2070,6 +2682,8 @@ export default function App() {
 
     const startTime = Date.now();
     let totalCompleted = 0;
+    const batchRetryCounts = new Map<number, number>();
+    const MAX_BATCH_RETRIES = 2;
 
     const workers = Array(workerCount).fill(null).map(async (_, i) => {
       const workerId = `gemini-worker-${i}`;
@@ -2103,14 +2717,15 @@ export default function App() {
         }
         if (batch.length === 0) break;
 
-        setWorkerStates(prev => ({ ...prev, [workerId]: { ...prev[workerId], currentItem: batch[0].index, status: 'working' } }));
+        const batchKey = batch[0].index;
+        setWorkerStates(prev => ({ ...prev, [workerId]: { ...prev[workerId], currentItem: batchKey, status: 'working' } }));
 
         try {
-          addLog(`Worker ${i} translating batch starting at #${batch[0].index}...`, "info");
+          addLog(`Worker ${i} translating batch starting at #${batchKey}...`, "info");
           const results = await geminiRef.current!.translateBatch(
             batch.map(b => ({ index: b.index, text: stripFormatting(b.text) })), 
-            context, 
-            customPrompt,
+            activeContext, 
+            effectiveCustomPrompt,
             abortSignal,
             translationSettings
           );
@@ -2118,8 +2733,15 @@ export default function App() {
           if (stopGeminiRef.current || abortSignal.aborted) break;
 
           if (!results || results.length === 0) {
-            addLog(`Worker ${i} received empty results for batch. Retrying...`, "warning");
-            queue.push(...batch);
+            const tries = (batchRetryCounts.get(batchKey) || 0) + 1;
+            batchRetryCounts.set(batchKey, tries);
+            if (tries <= MAX_BATCH_RETRIES) {
+              addLog(`Worker ${i} received empty results for batch #${batchKey}. Retry ${tries}/${MAX_BATCH_RETRIES}...`, "warning");
+              queue.push(...batch);
+              await new Promise(r => setTimeout(r, 1500));
+            } else {
+              addLog(`Batch starting at #${batchKey} skipped after ${MAX_BATCH_RETRIES} empty responses.`, "error");
+            }
             continue;
           }
 
@@ -2160,7 +2782,7 @@ export default function App() {
               geminiAbortControllerRef.current.abort();
               geminiAbortControllerRef.current = null;
             }
-            queue.length = 0; // Empty queue immediately
+            queue.length = 0;
             setIsTranslating(false);
             setTranslationSpeed(0);
             setWorkerStates(prev => {
@@ -2170,16 +2792,31 @@ export default function App() {
               });
               return next;
             });
-            setError("HARD LIMIT AUTO-HALT: API returned 429 Too Many Requests or Quota Limit Exceeded. All active workers halted immediately to protect your API key.");
+            setError("HARD LIMIT AUTO-HALT: API returned 429 Too Many Requests or Quota Limit Exceeded. All active workers halted immediately.");
             addLog("⚠️ HARD LIMIT AUTO-HALT: 429 / Quota Limit Exceeded. Translation stopped instantly.", "error");
             break;
           }
 
-          addLog(`Worker ${i} error: ${err.message}`, "error");
-          if (!stopGeminiRef.current && !abortSignal.aborted) {
-            // Put back in queue for retry
+          // Halt immediately on fatal non-retryable server configuration/auth errors
+          const isFatalConfigError = err?.statusCode === 503 || err?.statusCode === 401 || err?.statusCode === 403 || /GEMINI_API_KEY is not configured|API_KEY_INVALID/i.test(err?.message || '');
+          if (isFatalConfigError) {
+            stopGeminiRef.current = true;
+            geminiAbortControllerRef.current?.abort();
+            queue.length = 0;
+            setError(err.message);
+            addLog(`Translation stopped: ${err.message}`, "error");
+            addNotification(err.message, "error");
+            break;
+          }
+
+          const tries = (batchRetryCounts.get(batchKey) || 0) + 1;
+          batchRetryCounts.set(batchKey, tries);
+          addLog(`Worker ${i} error on #${batchKey} (attempt ${tries}/${MAX_BATCH_RETRIES + 1}): ${err.message}`, "error");
+          if (!stopGeminiRef.current && !abortSignal.aborted && tries <= MAX_BATCH_RETRIES) {
             queue.push(...batch);
-            await new Promise(r => setTimeout(r, 4000));
+            await new Promise(r => setTimeout(r, 3000));
+          } else {
+            addNotification(`Batch #${batchKey} failed: ${err.message}`, "error");
           }
         }
       }
@@ -2190,6 +2827,7 @@ export default function App() {
     setIsTranslating(false);
     setTranslationSpeed(0);
     geminiAbortControllerRef.current = null;
+    setTimeout(() => recordStreamChanges(subsBeforeTranslation, subtitlesRef.current), 60);
     if (!stopGeminiRef.current && !abortSignal.aborted) addLog("Translation complete.", "success");
   };
 
@@ -2213,6 +2851,7 @@ export default function App() {
 
   const translateAllGoogle = async () => {
     if (isGoogleTranslatingAll) return;
+    const subsBeforeGoogle = subtitlesRef.current;
     setIsGoogleTranslatingAll(true);
     stopGoogleRef.current = false;
     googleAbortControllerRef.current = new AbortController();
@@ -2261,7 +2900,9 @@ export default function App() {
         const next = [...prev];
         updates.forEach(update => {
           const idx = next.findIndex(s => s.index === update.index);
-          if (idx !== -1) next[idx].googleTranslateText = update.googleTranslateText;
+          if (idx !== -1) {
+            next[idx] = { ...next[idx], googleTranslateText: update.googleTranslateText };
+          }
         });
         return next;
       });
@@ -2298,7 +2939,8 @@ export default function App() {
             googleApiKey, 
             abortSignal, 
             geminiRef.current || undefined,
-            translationSettings
+            translationSettings,
+            preferencesRef.current.googleRoutingMode
           );
           if (stopGoogleRef.current || abortSignal.aborted) break;
 
@@ -2308,9 +2950,10 @@ export default function App() {
             addLog("⚠️ Google API returned 403 Forbidden. Switched seamlessly to Gemini Machine Translation Engine.", "warning");
           }
 
-          completedInBatch.push(...results.map((r, idx) => ({ 
-            ...batch[idx], 
-            googleTranslateText: r.googleTranslateText 
+          const byIndex = new Map(results.map(r => [r.index, r.googleTranslateText]));
+          completedInBatch.push(...batch.map((item, idx) => ({ 
+            ...item, 
+            googleTranslateText: byIndex.get(item.index) ?? results[idx]?.googleTranslateText ?? ''
           })));
         } catch (err: any) {
           if (err?.name === 'AbortError' || stopGoogleRef.current || abortSignal.aborted) {
@@ -2320,7 +2963,8 @@ export default function App() {
           if (geminiRef.current) {
             try {
               const fallback = await geminiRef.current.translateBatchNeutral(batch, undefined, abortSignal, translationSettings);
-              completedInBatch.push(...fallback.map((r, idx) => ({ ...batch[idx], googleTranslateText: r.googleTranslateText })));
+              const fbMap = new Map(fallback.map(r => [r.index, r.googleTranslateText]));
+              completedInBatch.push(...batch.map((item, idx) => ({ ...item, googleTranslateText: fbMap.get(item.index) ?? fallback[idx]?.googleTranslateText ?? '' })));
               continue;
             } catch (fbErr) {
               console.error("Fallback failed", fbErr);
@@ -2339,6 +2983,7 @@ export default function App() {
     setIsGoogleTranslatingAll(false);
     setTranslationSpeed(0);
     googleAbortControllerRef.current = null;
+    setTimeout(() => recordStreamChanges(subsBeforeGoogle, subtitlesRef.current), 60);
     if (!stopGoogleRef.current) {
       addLog("Parallel Google translation complete.", "success");
     } else {
@@ -2354,7 +2999,13 @@ export default function App() {
       addLog(`Translating line #${index} with machine translator...`, "info");
       let translated = '';
       try {
-        translated = await translateTextGoogle(item.text, googleApiKey, undefined, translationSettingsRef.current);
+        translated = await translateTextGoogle(
+          item.text,
+          googleApiKey,
+          undefined,
+          translationSettingsRef.current,
+          preferencesRef.current.googleRoutingMode
+        );
       } catch (err: any) {
         if (geminiRef.current) {
           translated = await geminiRef.current.getNeutralTranslation(item.text, undefined, translationSettingsRef.current);
@@ -2407,10 +3058,11 @@ export default function App() {
 
   const downloadFormattedSubtitles = async (
     format: 'srt-formatted' | 'ass' | 'ssa' | 'vtt' | 'srt-clean' | 'sbv' | 'lrc' | 'txt' | 'json' | 'copy',
-    type: 'ai' | 'google' | 'original' = 'ai'
+    type: 'ai' | 'google' | 'original' = 'ai',
+    folderTarget?: { directoryHandle?: any; dirName?: string }
   ) => {
     if (subtitles.length === 0) {
-      addLog("Download failed: No subtitles to export.", "error");
+      addLog("Export failed: No subtitles to export.", "error");
       addNotification("No subtitles to export", "error");
       return;
     }
@@ -2427,7 +3079,6 @@ export default function App() {
         navigator.clipboard.writeText(content);
         addNotification("Subtitles copied to clipboard for Android / WhatsApp!", "success");
         addLog("Copied dialogue transcript to clipboard for mobile sharing.", "success");
-        setIsExportMenuOpen(false);
         return;
       }
 
@@ -2484,12 +3135,37 @@ export default function App() {
       }
 
       if (!content || content.trim().length === 0) {
-        addLog("Download failed: Generated file was empty.", "error");
+        addLog("Export failed: Generated file was empty.", "error");
         return;
       }
 
       const outFileName = `${baseName}_${fileExt}`;
       const blob = new Blob(['\ufeff' + content], { type: mimeType });
+
+      // Direct export to user-selected folder when File System Access handle is provided
+      if (folderTarget?.directoryHandle) {
+        try {
+          const dirHandle = folderTarget.directoryHandle;
+          let perm = typeof dirHandle.queryPermission === 'function'
+            ? await dirHandle.queryPermission({ mode: 'readwrite' })
+            : 'granted';
+          if (perm === 'prompt' && typeof dirHandle.requestPermission === 'function') {
+            perm = await dirHandle.requestPermission({ mode: 'readwrite' });
+          }
+          if (perm === 'granted' && typeof dirHandle.getFileHandle === 'function') {
+            const fileHandle = await dirHandle.getFileHandle(outFileName, { create: true });
+            const writable = await fileHandle.createWritable();
+            await writable.write(blob);
+            await writable.close();
+            const label = folderTarget.dirName || dirHandle.name || 'selected folder';
+            addLog(`Exported ${outFileName} to folder "${label}".`, "success");
+            addNotification(`Exported ${outFileName} to ${label}`, "success");
+            return;
+          }
+        } catch (dirErr: any) {
+          addLog(`Folder export unavailable (${dirErr?.message || 'permission denied'}), falling back to standard export.`, "warning");
+        }
+      }
 
       // If on Android / Mobile and Web Share API is available, try native share sheet
       let sharedViaSystem = false;
@@ -2508,7 +3184,6 @@ export default function App() {
           }
         } catch (shareErr: any) {
           if (shareErr.name === 'AbortError') {
-            setIsExportMenuOpen(false);
             return;
           }
         }
@@ -2528,10 +3203,9 @@ export default function App() {
           URL.revokeObjectURL(url);
         }, 30000);
 
-        addLog(`Saved ${format.toUpperCase()} subtitles: ${outFileName}`, "success");
-        addNotification(`Downloaded ${format.toUpperCase()} format`, "success");
+        addLog(`Exported ${format.toUpperCase()} subtitles: ${outFileName}`, "success");
+        addNotification(`Exported ${format.toUpperCase()} format`, "success");
       }
-      setIsExportMenuOpen(false);
     } catch (err: any) {
       console.error("Export failed:", err);
       addLog(`Export failed: ${err.message}`, "error");
@@ -2604,23 +3278,33 @@ export default function App() {
   const resetProject = async () => {
     // Clears stored project state and resets styling & configurations to defaults
     try {
-      await dbService.clearState();
+      await Promise.all([dbService.clearState(), dbService.clearCrashSnapshot()]);
+      setCrashSnapshot(null);
       setSubtitles([]);
+      historyRef.current = [];
+      historyIndexRef.current = -1;
       setHistory([]);
       setHistoryIndex(-1);
+      blockHistoryRef.current.clear();
+      setBlockHistoryVersion(v => v + 1);
+      resetStreamHistory([]);
+      setActiveDraftId(null);
       setContext('');
       setFileName('');
       setDetectedFormat('');
       setLogs([]);
       setError(null);
+      setQcFilter('all');
       setSelectedIndices(new Set());
       setActiveStylingConfig(DEFAULT_STYLING_CONFIG);
-      setIsWorkspaceStylingPreview(true);
-      setIsReadOnly(true);
+      setHasAppliedCustomStyle(false);
+      setIsWorkspaceStylingPreview(false);
+      setIsReadOnly(preferences.defaultReadOnly);
       setStudioColumnsToDisplay({ original: true, ai: true, google: true, time: true });
       setVisibleColumns({ time: true, original: true, ai: true, google: true });
       setSessionId(`GCS-${Math.random().toString(36).substring(2, 15).toUpperCase()}`);
       setSaveStatus('saved');
+      refreshDraftsAndStats();
       addLog("Project discarded and reset to fresh state.", "warning");
       addNotification("Project discarded and memory reset", "success");
     } catch (e) {
@@ -2629,10 +3313,379 @@ export default function App() {
     }
   };
 
-  const clearLogs = () => {
-    setLogs([]);
-    addLog("Logs cleared.", "info");
-  };
+  const handleLoadFromUrl = useCallback(async (url: string) => {
+    try {
+      let content = '';
+      try {
+        const response = await fetch(url, {
+          signal: typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(12000) : undefined,
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status} ${response.statusText}`);
+        }
+        content = await response.text();
+      } catch (directErr: any) {
+        // Fallback to server-side proxy when remote server blocks browser CORS
+        const proxyRes = await fetch('/api/fetch-subtitles', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url }),
+        });
+        const proxyData = await proxyRes.json().catch(() => ({}));
+        if (!proxyRes.ok || typeof proxyData?.content !== 'string') {
+          throw new Error(proxyData?.error || directErr?.message || `HTTP ${proxyRes.status}`);
+        }
+        content = proxyData.content;
+      }
+      let derivedName = 'online_subtitles.srt';
+      try {
+        const parsedUrl = new URL(url);
+        const tail = parsedUrl.pathname.split('/').filter(Boolean).pop();
+        if (tail) derivedName = tail;
+      } catch {}
+      const { items, detectedFormat: detectedFmt } = parseUniversalCaptions(content, derivedName);
+      if (items.length === 0) {
+        throw new Error('Could not parse any valid subtitle segments from URL response.');
+      }
+      setSubtitles(items);
+      historyRef.current = [items];
+      historyIndexRef.current = 0;
+      setHistory([items]);
+      setHistoryIndex(0);
+      blockHistoryRef.current.clear();
+      setBlockHistoryVersion(v => v + 1);
+      resetStreamHistory(items);
+      setOriginalTimingMap(createOriginalTimingMap(items));
+      setActiveDraftId(null);
+      setHasAppliedCustomStyle(false);
+      setIsWorkspaceStylingPreview(false);
+      setSelectedIndices(new Set());
+      setFileName(derivedName);
+      setDetectedFormat(`${detectedFmt} (Online URL)`);
+      setQcFilter('all');
+      dbService.clearCrashSnapshot().catch(() => {});
+      setCrashSnapshot(null);
+      setActiveTab('workspace');
+      addLog(`Loaded ${items.length} segments from URL: ${derivedName}`, 'success');
+      addNotification(`Loaded ${items.length} online segments`, 'success');
+    } catch (err: any) {
+      const msg = err?.message?.includes('Failed to fetch')
+        ? 'CORS blocked by remote server or offline. Try raw GitHub/CDN URL or local download.'
+        : (err?.message || 'Failed to load URL');
+      addLog(`Online URL import failed: ${msg}`, 'error');
+      throw new Error(msg);
+    }
+  }, [addLog, addNotification, resetStreamHistory]);
+
+  const handleSaveCurrentAsDraft = useCallback(async (title: string) => {
+    if (subtitles.length === 0) {
+      addNotification('Load subtitles before saving a draft', 'error');
+      return;
+    }
+    const cleanTitle = title.trim() || fileName || `Draft ${new Date().toLocaleTimeString()}`;
+    const aiCount = subtitles.filter(s => s.translatedText).length;
+    const gCount = subtitles.filter(s => s.googleTranslateText).length;
+    const tags: string[] = [];
+    if (aiCount > 0) tags.push('AI');
+    if (gCount > 0) tags.push('Neutral / Google');
+    const hasBilingual = subtitles.some(
+      s =>
+        s.translatedText &&
+        s.translatedText.includes('\n') &&
+        /[a-zA-Z]/.test(s.translatedText) &&
+        /[\u0600-\u06FF]/.test(s.translatedText)
+    );
+    if (hasBilingual || translationSettings.scriptMode?.startsWith('bilingual') || (aiCount > 0 && gCount > 0)) {
+      tags.push('Bilingual');
+    }
+    if (subtitles.some(s => /[\u0600-\u06FF]/.test(s.translatedText || s.googleTranslateText || ''))) {
+      tags.push('Urdu');
+    } else if (
+      subtitles.some(
+        s =>
+          (s.translatedText || s.googleTranslateText) &&
+          /[a-zA-Z]/.test(s.translatedText || s.googleTranslateText || '')
+      )
+    ) {
+      tags.push('Roman');
+    }
+    const fmt = (detectedFormat || 'SRT').split(' ')[0].replace(/[^a-zA-Z0-9.]/g, '');
+    if (fmt && !tags.includes(fmt)) tags.push(fmt);
+
+    const draft: ProjectDraft = {
+      id: `draft-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      title: cleanTitle,
+      fileName: fileName || `${cleanTitle}.srt`,
+      detectedFormat: detectedFormat || 'SRT',
+      sourceType: detectedFormat.includes('Online') ? 'url' : detectedFormat.includes('Demo') ? 'demo' : 'local',
+      updatedAt: new Date().toISOString(),
+      subtitleCount: subtitles.length,
+      translatedCount: aiCount,
+      googleCount: gCount,
+      tags,
+      subtitles,
+      context,
+      customPrompt,
+      translationSettings,
+      activeStylingConfig,
+    };
+    try {
+      await dbService.saveDraft(draft);
+      setActiveDraftId(draft.id);
+      await refreshDraftsAndStats();
+      addLog(`Saved project draft "${cleanTitle}" (${subtitles.length} lines).`, 'success');
+      addNotification(`Saved draft: ${cleanTitle}`, 'saved');
+    } catch {
+      addNotification(`Could not save draft "${cleanTitle}"`, 'not-saved');
+    }
+  }, [subtitles, fileName, detectedFormat, context, customPrompt, translationSettings, activeStylingConfig, refreshDraftsAndStats, addLog, addNotification]);
+
+  const handleLoadDraft = useCallback((draft: ProjectDraft) => {
+    blockHistoryRef.current.clear();
+    setBlockHistoryVersion(v => v + 1);
+    setSubtitles(draft.subtitles);
+    historyRef.current = [draft.subtitles];
+    historyIndexRef.current = 0;
+    setHistory([draft.subtitles]);
+    setHistoryIndex(0);
+    resetStreamHistory(draft.subtitles);
+    setOriginalTimingMap(createOriginalTimingMap(draft.subtitles));
+    setSelectedIndices(new Set());
+    setActiveDraftId(draft.id);
+    setFileName(draft.fileName);
+    setDetectedFormat(draft.detectedFormat || 'Saved Draft');
+    setContext(draft.context || '');
+    setCustomPrompt(draft.customPrompt || '');
+    if (draft.translationSettings) setTranslationSettings(draft.translationSettings);
+    if (draft.activeStylingConfig) setActiveStylingConfig(draft.activeStylingConfig);
+    const draftHasTags = Boolean(draft.subtitles?.some(s => hasFormatting(s.translatedText || s.text || '')));
+    setHasAppliedCustomStyle(draftHasTags);
+    setIsWorkspaceStylingPreview(draftHasTags);
+    setQcFilter('all');
+    dbService.clearCrashSnapshot().catch(() => {});
+    setCrashSnapshot(null);
+    setActiveTab('workspace');
+    addLog(`Loaded draft "${draft.title}" (${draft.subtitleCount} lines).`, 'success');
+    addNotification(`Opened draft: ${draft.title}`, 'success');
+  }, [addLog, addNotification, resetStreamHistory]);
+
+  const handleDuplicateDraft = useCallback(async (draft: ProjectDraft) => {
+    const copy: ProjectDraft = {
+      ...draft,
+      id: `draft-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      title: `${draft.title} (Copy)`,
+      updatedAt: new Date().toISOString(),
+    };
+    await dbService.saveDraft(copy);
+    await refreshDraftsAndStats();
+    addNotification('Draft duplicated', 'success');
+  }, [refreshDraftsAndStats, addNotification]);
+
+  const handleDeleteDraft = useCallback(async (id: string) => {
+    await dbService.deleteDraft(id);
+    setActiveDraftId(prev => (prev === id ? null : prev));
+    await refreshDraftsAndStats();
+    addNotification('Draft removed', 'success');
+  }, [refreshDraftsAndStats, addNotification]);
+
+  const handleRecoverCrash = useCallback(() => {
+    if (!crashSnapshot) return;
+    blockHistoryRef.current.clear();
+    setBlockHistoryVersion(v => v + 1);
+    setSubtitles(crashSnapshot.subtitles);
+    historyRef.current = [crashSnapshot.subtitles];
+    historyIndexRef.current = 0;
+    setHistory([crashSnapshot.subtitles]);
+    setHistoryIndex(0);
+    resetStreamHistory(crashSnapshot.subtitles);
+    setOriginalTimingMap(createOriginalTimingMap(crashSnapshot.subtitles));
+    setActiveDraftId(null);
+    setFileName(crashSnapshot.fileName || 'recovered_project.srt');
+    setDetectedFormat(crashSnapshot.detectedFormat || 'Crash Recovery');
+    setContext(crashSnapshot.context || '');
+    setCustomPrompt(crashSnapshot.customPrompt || '');
+    setQcFilter('all');
+    dbService.clearCrashSnapshot().catch(() => {});
+    setCrashSnapshot(null);
+    setActiveTab('workspace');
+    addLog(`Restored crash-recovery snapshot (${crashSnapshot.subtitles.length} lines).`, 'success');
+    addNotification('Session restored from auto-save', 'success');
+  }, [crashSnapshot, addLog, addNotification, resetStreamHistory]);
+
+  const handleDismissCrash = useCallback(() => {
+    dbService.clearCrashSnapshot().catch(() => {});
+    setCrashSnapshot(null);
+  }, []);
+
+  const handleClearAllDrafts = useCallback(async () => {
+    await dbService.clearAllDrafts();
+    setActiveDraftId(null);
+    await refreshDraftsAndStats();
+    addLog('Cleared all saved drafts from IndexedDB.', 'warning');
+    addNotification('All saved drafts cleared', 'success');
+  }, [refreshDraftsAndStats, addLog, addNotification]);
+
+  const handleResetPreferences = useCallback(() => {
+    setPreferences(DEFAULT_APP_PREFERENCES);
+    setTheme(DEFAULT_APP_PREFERENCES.theme);
+    setPageSize(DEFAULT_APP_PREFERENCES.defaultPageSize);
+    setIsReadOnly(DEFAULT_APP_PREFERENCES.defaultReadOnly);
+    addNotification('All app preferences reset to defaults', 'success');
+    addLog('App preferences reset to defaults.', 'info');
+  }, [addNotification, addLog]);
+
+  const handleExportBackup = useCallback(async () => {
+    try {
+      const allDrafts = await dbService.listDrafts();
+      const backup: FullAppBackup = {
+        version: 1,
+        appName: 'Urdu Localizer',
+        exportedAt: new Date().toISOString(),
+        preferences,
+        glossary,
+        activeProject: {
+          fileName,
+          detectedFormat,
+          subtitles,
+          context,
+          customPrompt,
+          translationSettings,
+          activeStylingConfig,
+        },
+        drafts: allDrafts,
+      };
+      const json = JSON.stringify(backup, null, 2);
+      const outName = `urdu_localizer_backup_${new Date().toISOString().slice(0, 10)}.json`;
+      const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = url;
+      a.download = outName;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        if (document.body.contains(a)) document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 15000);
+      addLog(`Exported full JSON backup: ${outName}`, 'success');
+      addNotification('Full JSON backup exported', 'success');
+    } catch (err: any) {
+      addLog(`Backup export failed: ${err?.message || err}`, 'error');
+      addNotification('Failed to export backup', 'error');
+    }
+  }, [preferences, glossary, fileName, detectedFormat, subtitles, context, customPrompt, translationSettings, activeStylingConfig, addLog, addNotification]);
+
+  const handleImportBackup = useCallback(async (file: File) => {
+    try {
+      const raw = await file.text();
+      const parsed = JSON.parse(raw) as Partial<FullAppBackup>;
+      if (!parsed || typeof parsed !== 'object' || !parsed.preferences) {
+        throw new Error('Invalid Urdu Localizer backup JSON format.');
+      }
+      const nextPrefs: AppPreferences = {
+        ...DEFAULT_APP_PREFERENCES,
+        ...parsed.preferences,
+        uiZoom: clampZoom(Number(parsed.preferences.uiZoom ?? 100)),
+        headerVisibility: { ...DEFAULT_APP_PREFERENCES.headerVisibility, ...(parsed.preferences.headerVisibility || {}) },
+        menuVisibility: { ...DEFAULT_APP_PREFERENCES.menuVisibility, ...(parsed.preferences.menuVisibility || {}) },
+        optionalFeatures: { ...DEFAULT_APP_PREFERENCES.optionalFeatures, ...(parsed.preferences.optionalFeatures || {}) },
+      };
+      setPreferences(nextPrefs);
+      setTheme(nextPrefs.theme);
+      setPageSize(nextPrefs.defaultPageSize);
+      setIsReadOnly(nextPrefs.defaultReadOnly);
+      if (Array.isArray(parsed.glossary)) setGlossary(parsed.glossary);
+      if (Array.isArray(parsed.drafts)) {
+        for (const d of parsed.drafts) {
+          if (d?.id && Array.isArray(d?.subtitles)) {
+            await dbService.saveDraft(d);
+          }
+        }
+      }
+      if (parsed.activeProject && Array.isArray(parsed.activeProject.subtitles) && parsed.activeProject.subtitles.length > 0) {
+        setSubtitles(parsed.activeProject.subtitles);
+        historyRef.current = [parsed.activeProject.subtitles];
+        historyIndexRef.current = 0;
+        setHistory([parsed.activeProject.subtitles]);
+        setHistoryIndex(0);
+        resetStreamHistory(parsed.activeProject.subtitles);
+        setActiveDraftId(null);
+        setOriginalTimingMap(createOriginalTimingMap(parsed.activeProject.subtitles));
+        setFileName(parsed.activeProject.fileName || 'restored_project.srt');
+        setDetectedFormat(parsed.activeProject.detectedFormat || 'Backup Restore');
+        setContext(parsed.activeProject.context || '');
+        setCustomPrompt(parsed.activeProject.customPrompt || '');
+        if (parsed.activeProject.translationSettings) setTranslationSettings(parsed.activeProject.translationSettings);
+        if (parsed.activeProject.activeStylingConfig) setActiveStylingConfig(parsed.activeProject.activeStylingConfig);
+      }
+      await refreshDraftsAndStats();
+      addLog(`Imported full JSON backup from ${file.name}.`, 'success');
+      addNotification('Backup restored successfully', 'success');
+    } catch (err: any) {
+      addLog(`Backup import failed: ${err?.message || err}`, 'error');
+      addNotification(err?.message || 'Backup import failed', 'error');
+    }
+  }, [refreshDraftsAndStats, addLog, addNotification, resetStreamHistory]);
+
+  const handleBakeAllStyles = useCallback((silent = false) => {
+    if (subtitles.length === 0) {
+      setHasPendingStyleBake(false);
+      return;
+    }
+    const styled = applyGradientsToSubtitles(
+      subtitles,
+      activeStylingConfig.paletteId,
+      activeStylingConfig.gradientMode,
+      activeStylingConfig.targetStreams,
+      {
+        customColors: activeStylingConfig.customColors,
+        boldEmphasis: activeStylingConfig.boldEmphasis,
+        italicize: activeStylingConfig.italicize,
+        uppercaseOriginal: activeStylingConfig.transformCase === 'uppercase',
+      }
+    );
+    updateSubtitles(styled);
+    setHasAppliedCustomStyle(true);
+    setIsWorkspaceStylingPreview(true);
+    setHasPendingStyleBake(false);
+    addNotification(
+      silent ? 'Styles auto-baked onto subtitles' : 'Baked & applied all styles to subtitle project!',
+      'saved'
+    );
+    addLog('Baked active styling configuration onto subtitles.', 'success');
+  }, [subtitles, activeStylingConfig, updateSubtitles, addNotification, addLog]);
+
+  // Auto-bake pending styling edits when exiting the Styling Studio tab
+  const prevTabRef = useRef<MobileTab>(activeTab);
+  useEffect(() => {
+    const prevTab = prevTabRef.current;
+    prevTabRef.current = activeTab;
+    if (prevTab === 'styling' && activeTab !== 'styling' && hasPendingStyleBake) {
+      handleBakeAllStyles(true);
+    }
+  }, [activeTab, hasPendingStyleBake, handleBakeAllStyles]);
+
+  const handleDeleteDraftFromStorage = useCallback(async (id: string) => {
+    await dbService.deleteDraft(id);
+    setActiveDraftId(prev => (prev === id ? null : prev));
+    await refreshDraftsAndStats();
+    addNotification('Draft deleted from storage', 'success');
+  }, [refreshDraftsAndStats, addNotification]);
+
+  const handleClearCrashSnapshotFromStorage = useCallback(async () => {
+    await dbService.clearCrashSnapshot();
+    setCrashSnapshot(null);
+    await refreshDraftsAndStats();
+    addNotification('Crash recovery snapshot cleared', 'success');
+  }, [refreshDraftsAndStats, addNotification]);
+
+  const handleDeleteLocalFontById = useCallback((id: string) => {
+    const updated = localFonts.filter(f => f.id !== id);
+    setLocalFonts(updated);
+    saveLocalFontsToStorage(updated);
+    addNotification('Custom font removed from storage', 'success');
+  }, [localFonts, addNotification]);
 
   const restoreDefaultPrompt = () => {
     setCustomPrompt('Translate naturally for a family drama setting.');
@@ -2645,6 +3698,8 @@ export default function App() {
       if (saved) {
         setSubtitles(saved.subtitles || []);
         if (saved.subtitles) {
+          historyRef.current = [saved.subtitles];
+          historyIndexRef.current = 0;
           setHistory([saved.subtitles]);
           setHistoryIndex(0);
         }
@@ -2653,17 +3708,9 @@ export default function App() {
         setLogs(saved.logs || []);
         setFileName(saved.fileName || '');
         if (saved.selectedModel) setSelectedModel(saved.selectedModel);
-        if (saved.customApiKey) setCustomApiKey(saved.customApiKey);
         if (saved.googleApiKey) setGoogleApiKey(saved.googleApiKey);
-        if ((saved as any).theme) {
-          const savedTh = (saved as any).theme;
-          if (savedTh === 'light') setTheme('classic');
-          else if (savedTh === 'dark') setTheme('cinematic');
-          else setTheme(savedTh as AppTheme);
-        }
         if ((saved as any).activeStylingConfig) setActiveStylingConfig((saved as any).activeStylingConfig);
         if ((saved as any).isWorkspaceStylingPreview !== undefined) setIsWorkspaceStylingPreview(Boolean((saved as any).isWorkspaceStylingPreview));
-        if ((saved as any).isReadOnly !== undefined) setIsReadOnly(Boolean((saved as any).isReadOnly));
         if ((saved as any).studioColumnsToDisplay) setStudioColumnsToDisplay((saved as any).studioColumnsToDisplay);
         if (saved.visibleColumns) setVisibleColumns(saved.visibleColumns);
         addLog("Project and styling cache restored manually.", "success");
@@ -2685,14 +3732,6 @@ export default function App() {
     // Clear any existing object URLs if we were tracking them (we aren't explicitly, but good practice)
     addLog("Download session refreshed. Browser download state reset.", "success");
   };
-
-  const projectStats = useMemo(() => {
-    const totalChars = subtitles.reduce((acc, s) => acc + s.text.length, 0);
-    const totalUrduChars = subtitles.reduce((acc, s) => acc + (s.translatedText?.length || 0), 0);
-    const totalIndexes = subtitles.length;
-    const estimatedTokens = Math.ceil(totalChars / 4); // Rough estimation
-    return { totalChars, totalUrduChars, totalIndexes, estimatedTokens };
-  }, [subtitles]);
 
   // Live 3-Streams Preview Sample Texts for Header (Cleaned, Formatted & Tag-Free)
   const previewSource = useMemo(() => {
@@ -2726,34 +3765,15 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [searchInput]);
 
-  // Click outside & Escape key to auto-close Text Resize, Fonts, and Export dropdowns
+  // Escape key & Global Undo/Redo Shortcuts
   useEffect(() => {
-    const handleOutsideClick = (e: MouseEvent | TouchEvent) => {
-      const target = e.target as Node;
-      if (textResizeRef.current && !textResizeRef.current.contains(target)) {
-        setIsTextResizeOpen(false);
-      }
-      if (fontsRef.current && !fontsRef.current.contains(target)) {
-        setIsFontsOpen(false);
-      }
-      if (exportMenuRef.current && !exportMenuRef.current.contains(target)) {
-        setIsExportMenuOpen(false);
-      }
-      if (columnMenuRef.current && !columnMenuRef.current.contains(target)) {
-        setIsColumnMenuOpen(false);
-      }
-      if (workspaceToolsRef.current && !workspaceToolsRef.current.contains(target)) {
-        setIsWorkspaceToolsOpen(false);
-      }
-    };
-
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setIsTextResizeOpen(false);
         setIsFontsOpen(false);
-        setIsExportMenuOpen(false);
-        setIsColumnMenuOpen(false);
-        setIsWorkspaceToolsOpen(false);
+        setIsHomeDrawerOpen(false);
+        setIsTranslatorDrawerOpen(false);
+        setIsWorkspaceDrawerOpen(false);
       }
 
       // Global Undo/Redo Shortcuts (when not editing an input or textarea)
@@ -2774,31 +3794,110 @@ export default function App() {
       }
     };
 
-    document.addEventListener('mousedown', handleOutsideClick);
-    document.addEventListener('touchstart', handleOutsideClick);
     document.addEventListener('keydown', handleKeyDown);
 
     return () => {
-      document.removeEventListener('mousedown', handleOutsideClick);
-      document.removeEventListener('touchstart', handleOutsideClick);
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, [handleUndo, handleRedo]);
 
+  // Per-block Undo / Redo helpers
+  const recordBlockEdit = useCallback((
+    index: number,
+    prevSnap: { text: string; translatedText?: string; googleTranslateText?: string },
+    nextSnap: { text: string; translatedText?: string; googleTranslateText?: string }
+  ) => {
+    if (
+      prevSnap.text === nextSnap.text &&
+      prevSnap.translatedText === nextSnap.translatedText &&
+      prevSnap.googleTranslateText === nextSnap.googleTranslateText
+    ) {
+      return;
+    }
+    const existing = blockHistoryRef.current.get(index);
+    if (!existing) {
+      blockHistoryRef.current.set(index, { stack: [prevSnap, nextSnap], ptr: 1 });
+    } else {
+      const nextStack = existing.stack.slice(0, existing.ptr + 1);
+      nextStack.push(nextSnap);
+      if (nextStack.length > 30) nextStack.shift();
+      blockHistoryRef.current.set(index, { stack: nextStack, ptr: nextStack.length - 1 });
+    }
+    setBlockHistoryVersion(v => v + 1);
+  }, []);
+
+  const canUndoBlock = useCallback((index: number) => {
+    void blockHistoryVersion;
+    const entry = blockHistoryRef.current.get(index);
+    return Boolean(entry && entry.ptr > 0);
+  }, [blockHistoryVersion]);
+
+  const canRedoBlock = useCallback((index: number) => {
+    void blockHistoryVersion;
+    const entry = blockHistoryRef.current.get(index);
+    return Boolean(entry && entry.ptr < entry.stack.length - 1);
+  }, [blockHistoryVersion]);
+
+  const handleUndoBlock = useCallback((index: number) => {
+    const entry = blockHistoryRef.current.get(index);
+    if (!entry || entry.ptr <= 0) return;
+    const nextPtr = entry.ptr - 1;
+    const snap = entry.stack[nextPtr];
+    entry.ptr = nextPtr;
+    setBlockHistoryVersion(v => v + 1);
+    updateSubtitles(prev => prev.map(s => s.index === index ? { ...s, ...snap } : s));
+    addNotification(`Undid edit on block #${index}`, 'success');
+  }, [updateSubtitles, addNotification]);
+
+  const handleRedoBlock = useCallback((index: number) => {
+    const entry = blockHistoryRef.current.get(index);
+    if (!entry || entry.ptr >= entry.stack.length - 1) return;
+    const nextPtr = entry.ptr + 1;
+    const snap = entry.stack[nextPtr];
+    entry.ptr = nextPtr;
+    setBlockHistoryVersion(v => v + 1);
+    updateSubtitles(prev => prev.map(s => s.index === index ? { ...s, ...snap } : s));
+    addNotification(`Redid edit on block #${index}`, 'success');
+  }, [updateSubtitles, addNotification]);
+
   const handleManualEdit = useCallback((index: number, newText: string) => {
     if (isReadOnly) return;
+    const target = subtitlesRef.current.find(s => s.index === index);
+    if (target) {
+      recordBlockEdit(
+        index,
+        { text: target.text, translatedText: target.translatedText, googleTranslateText: target.googleTranslateText },
+        { text: target.text, translatedText: newText, googleTranslateText: target.googleTranslateText }
+      );
+    }
     updateSubtitles(prev => prev.map(s => s.index === index ? { ...s, translatedText: newText } : s));
-  }, [isReadOnly, updateSubtitles]);
+  }, [isReadOnly, updateSubtitles, recordBlockEdit]);
 
   const handleManualEditOriginal = useCallback((index: number, newText: string) => {
     if (isReadOnly) return;
+    const target = subtitlesRef.current.find(s => s.index === index);
+    if (target) {
+      recordBlockEdit(
+        index,
+        { text: target.text, translatedText: target.translatedText, googleTranslateText: target.googleTranslateText },
+        { text: newText, translatedText: target.translatedText, googleTranslateText: target.googleTranslateText }
+      );
+    }
     updateSubtitles(prev => prev.map(s => s.index === index ? { ...s, text: newText } : s));
-  }, [isReadOnly, updateSubtitles]);
+  }, [isReadOnly, updateSubtitles, recordBlockEdit]);
 
   const handleManualEditGoogle = useCallback((index: number, newText: string) => {
     if (isReadOnly) return;
+    const target = subtitlesRef.current.find(s => s.index === index);
+    if (target) {
+      recordBlockEdit(
+        index,
+        { text: target.text, translatedText: target.translatedText, googleTranslateText: target.googleTranslateText },
+        { text: target.text, translatedText: target.translatedText, googleTranslateText: newText }
+      );
+    }
     updateSubtitles(prev => prev.map(s => s.index === index ? { ...s, googleTranslateText: newText } : s));
-  }, [isReadOnly, updateSubtitles]);
+  }, [isReadOnly, updateSubtitles, recordBlockEdit]);
 
   const handleInsertSubtitle = useCallback((afterIndex?: number) => {
     if (isReadOnly) {
@@ -2843,2681 +3942,1466 @@ export default function App() {
     addLog(`Batch deleted ${count} subtitle segments.`, "info");
   }, [selectedIndices, isReadOnly, updateSubtitles, addNotification, addLog]);
 
-  // Sync theme to root html element for Tailwind v4 custom dark variant & multi-theme data attribute
-  useEffect(() => {
-    const root = document.documentElement;
-    const isDark = theme !== 'classic';
-    if (isDark) {
-      root.classList.add('dark');
-    } else {
-      root.classList.remove('dark');
+  // Per-stream Undo / Redo helpers
+  const canUndoStream = useCallback((field: WorkspaceStreamField) => {
+    void streamHistoryVersion;
+    const entry = streamHistoryRef.current[field];
+    return Boolean(entry && entry.ptr > 0);
+  }, [streamHistoryVersion]);
+
+  const canRedoStream = useCallback((field: WorkspaceStreamField) => {
+    void streamHistoryVersion;
+    const entry = streamHistoryRef.current[field];
+    return Boolean(entry && entry.ptr >= 0 && entry.ptr < entry.stack.length - 1);
+  }, [streamHistoryVersion]);
+
+  const handleUndoStream = useCallback((field: WorkspaceStreamField) => {
+    const entry = streamHistoryRef.current[field];
+    if (!entry || entry.ptr <= 0) return;
+    const nextPtr = entry.ptr - 1;
+    const snapshotArr = entry.stack[nextPtr];
+    entry.ptr = nextPtr;
+    setStreamHistoryVersion(v => v + 1);
+    isStreamHistoryNavigating.current = true;
+    updateSubtitles(prev =>
+      prev.map((s, idx) => {
+        const val = snapshotArr[idx];
+        if (val === undefined) return s;
+        if (field === 'orig') return { ...s, text: val };
+        if (field === 'ai') return { ...s, translatedText: val };
+        return { ...s, googleTranslateText: val };
+      })
+    );
+    setTimeout(() => { isStreamHistoryNavigating.current = false; }, 50);
+    const label = field === 'orig' ? 'Original' : field === 'ai' ? 'AI Translation' : 'Neutral / Google';
+    addNotification(`Undid change in ${label} column`, 'success');
+  }, [updateSubtitles, addNotification]);
+
+  const handleRedoStream = useCallback((field: WorkspaceStreamField) => {
+    const entry = streamHistoryRef.current[field];
+    if (!entry || entry.ptr >= entry.stack.length - 1) return;
+    const nextPtr = entry.ptr + 1;
+    const snapshotArr = entry.stack[nextPtr];
+    entry.ptr = nextPtr;
+    setStreamHistoryVersion(v => v + 1);
+    isStreamHistoryNavigating.current = true;
+    updateSubtitles(prev =>
+      prev.map((s, idx) => {
+        const val = snapshotArr[idx];
+        if (val === undefined) return s;
+        if (field === 'orig') return { ...s, text: val };
+        if (field === 'ai') return { ...s, translatedText: val };
+        return { ...s, googleTranslateText: val };
+      })
+    );
+    setTimeout(() => { isStreamHistoryNavigating.current = false; }, 50);
+    const label = field === 'orig' ? 'Original' : field === 'ai' ? 'AI Translation' : 'Neutral / Google';
+    addNotification(`Redid change in ${label} column`, 'success');
+  }, [updateSubtitles, addNotification]);
+
+  const handleSplitAllLong = useCallback(() => {
+    if (isReadOnly) {
+      addNotification("Editing is locked in Read-Only mode", "error");
+      return;
     }
-    root.setAttribute('data-app-theme', theme);
-    try {
-      localStorage.setItem('applet_theme', theme);
-    } catch {}
-  }, [theme]);
+    if (subtitlesRef.current.length === 0) return;
+    const { updatedSubtitles, splitBlocksCount, createdBlocksCount } = splitAllLongSubtitles(subtitlesRef.current, 2, 42);
+    if (splitBlocksCount === 0) {
+      addNotification("All subtitle blocks are already short (≤ 2 lines)", "success");
+      return;
+    }
+    updateSubtitles(updatedSubtitles);
+    addNotification(`Divided ${splitBlocksCount} long subtitle block(s) into ${splitBlocksCount + createdBlocksCount} ≤ 2-line segments`, "success");
+    addLog(`Divided ${splitBlocksCount} long subtitle block(s) into ${splitBlocksCount + createdBlocksCount} compact ≤ 2-line segments.`, "success");
+  }, [isReadOnly, updateSubtitles, addNotification, addLog]);
+
+  const colHeaderLongPressRef = useRef<{ timer: ReturnType<typeof setTimeout> | null; x: number; y: number }>({
+    timer: null,
+    x: 0,
+    y: 0,
+  });
+
+  const clearColHeaderLongPress = () => {
+    if (colHeaderLongPressRef.current.timer) {
+      clearTimeout(colHeaderLongPressRef.current.timer);
+      colHeaderLongPressRef.current.timer = null;
+    }
+  };
+
+  const startColHeaderLongPress = (e: React.TouchEvent, field: WorkspaceStreamField) => {
+    const target = e.target as HTMLElement | null;
+    if (target && target.closest('button, input, label')) return;
+    const t = e.touches[0];
+    if (!t) return;
+    colHeaderLongPressRef.current.x = t.clientX;
+    colHeaderLongPressRef.current.y = t.clientY;
+    const pos = { x: t.clientX, y: t.clientY };
+    clearColHeaderLongPress();
+    colHeaderLongPressRef.current.timer = setTimeout(() => {
+      colHeaderLongPressRef.current.timer = null;
+      setColumnHistoryMenu({ field, x: pos.x, y: pos.y });
+    }, 450);
+  };
+
+  const moveColHeaderLongPress = (e: React.TouchEvent) => {
+    if (!colHeaderLongPressRef.current.timer) return;
+    const t = e.touches[0];
+    if (!t) return;
+    if (
+      Math.abs(t.clientX - colHeaderLongPressRef.current.x) > 8 ||
+      Math.abs(t.clientY - colHeaderLongPressRef.current.y) > 8
+    ) {
+      clearColHeaderLongPress();
+    }
+  };
+
+  // Confirmation-wrapped critical workspace operations (Yes / No popups)
+  const confirmClearSelectedAI = useCallback(() => {
+    if (selectedIndices.size === 0) return;
+    setConfirmDialog({
+      title: 'Clear AI Translations?',
+      message: `Clear AI translation text from ${selectedIndices.size} selected block(s)? Timestamps and block numbers will be preserved.`,
+      danger: true,
+      onConfirm: () => {
+        setConfirmDialog(null);
+        clearSelectedTranslations();
+      },
+    });
+  }, [selectedIndices.size, clearSelectedTranslations]);
+
+  const confirmClearSelectedGoogle = useCallback(() => {
+    if (selectedIndices.size === 0) return;
+    setConfirmDialog({
+      title: 'Clear Neutral / Google Translations?',
+      message: `Clear Neutral / Google translation text from ${selectedIndices.size} selected block(s)?`,
+      danger: true,
+      onConfirm: () => {
+        setConfirmDialog(null);
+        clearSelectedGoogleTranslations();
+      },
+    });
+  }, [selectedIndices.size, clearSelectedGoogleTranslations]);
+
+  const confirmClearSelectedBoth = useCallback(() => {
+    if (selectedIndices.size === 0) return;
+    setConfirmDialog({
+      title: 'Clear Both Translation Streams?',
+      message: `Clear both AI and Neutral/Google translations from ${selectedIndices.size} selected block(s)?`,
+      danger: true,
+      onConfirm: () => {
+        setConfirmDialog(null);
+        clearSelectedBothTranslations();
+      },
+    });
+  }, [selectedIndices.size, clearSelectedBothTranslations]);
+
+  const confirmDeleteSelectedSubtitles = useCallback(() => {
+    if (selectedIndices.size === 0) return;
+    setConfirmDialog({
+      title: 'Delete Selected Subtitles?',
+      message: `Permanently remove ${selectedIndices.size} selected subtitle row(s) from this workspace?`,
+      danger: true,
+      onConfirm: () => {
+        setConfirmDialog(null);
+        deleteSelectedSubtitles();
+      },
+    });
+  }, [selectedIndices.size, deleteSelectedSubtitles]);
+
+  const confirmResetTimings = useCallback(() => {
+    setConfirmDialog({
+      title: 'Reset All Timings?',
+      message: 'Restore all subtitle timestamps back to the original baseline timings?',
+      danger: true,
+      onConfirm: () => {
+        setConfirmDialog(null);
+        handleResetTimingsToOriginal();
+      },
+    });
+  }, [handleResetTimingsToOriginal]);
+
+  const confirmResetBaseline = useCallback(() => {
+    if (historyRef.current.length === 0) return;
+    setConfirmDialog({
+      title: 'Undo All / Reset to Baseline?',
+      message: 'Revert all subtitle edits and translations in this session back to the initial baseline state?',
+      danger: true,
+      onConfirm: () => {
+        setConfirmDialog(null);
+        if (historyRef.current.length > 0) {
+          const baseline = historyRef.current[0];
+          subtitlesRef.current = baseline;
+          setSubtitles(baseline);
+          historyRef.current = [baseline];
+          historyIndexRef.current = 0;
+          setHistory([baseline]);
+          setHistoryIndex(0);
+          blockHistoryRef.current.clear();
+          setBlockHistoryVersion(v => v + 1);
+          resetStreamHistory(baseline);
+          addNotification('Reset to baseline', 'success');
+          addLog('Reset subtitles to initial baseline.', 'warning');
+        }
+      },
+    });
+  }, [addNotification, addLog, resetStreamHistory]);
+
+  const confirmClearSingleField = useCallback((index: number, field: WorkspaceStreamField) => {
+    const label = field === 'orig' ? 'Original' : field === 'ai' ? 'AI Translation' : 'Neutral / Google';
+    setConfirmDialog({
+      title: `Clear ${label} Text?`,
+      message: `Clear the ${label} text in subtitle block #${index}?`,
+      danger: true,
+      onConfirm: () => {
+        setConfirmDialog(null);
+        if (field === 'orig') handleManualEditOriginal(index, '');
+        else if (field === 'ai') handleManualEdit(index, '');
+        else handleManualEditGoogle(index, '');
+        addNotification(`Cleared ${label} on block #${index}`, 'success');
+      },
+    });
+  }, [handleManualEditOriginal, handleManualEdit, handleManualEditGoogle, addNotification]);
+
+  const hasActiveDrawerForTab =
+    activeTab === 'home' || activeTab === 'translator' || activeTab === 'workspace' || activeTab === 'styling';
+  const isCurrentTabDrawerOpen =
+    (activeTab === 'home' && isHomeDrawerOpen) ||
+    (activeTab === 'translator' && isTranslatorDrawerOpen) ||
+    (activeTab === 'workspace' && isWorkspaceDrawerOpen) ||
+    (activeTab === 'styling' && isStylingDrawerOpen);
+
+  const openActiveTabDrawer = useCallback(() => {
+    if (activeTab === 'home') setIsHomeDrawerOpen(true);
+    else if (activeTab === 'translator') setIsTranslatorDrawerOpen(true);
+    else if (activeTab === 'workspace') setIsWorkspaceDrawerOpen(true);
+    else if (activeTab === 'styling') setIsStylingDrawerOpen(true);
+  }, [activeTab]);
+
+  // Slide-open exclusive tab drawers by swiping left from the right edge of the screen
+  useEffect(() => {
+    const anyBlockingModalOpen =
+      isEditorModalOpen ||
+      isAiCinemaOpen ||
+      isStylingDrawerOpen ||
+      isPreviewSpaceOpen ||
+      isGoogleSettingsOpen ||
+      isAiConfigOpen ||
+      isUnifiedDownloadOpen ||
+      isFindReplaceOpen ||
+      isTimeShiftOpen ||
+      isGapTimingOpen ||
+      isTextCleanupOpen ||
+      isWatermarkModalOpen ||
+      isStylizerOpen ||
+      isTranslationSettingsModalOpen ||
+      isTextResizeOpen ||
+      isFontsOpen ||
+      isCurrentTabDrawerOpen;
+
+    if (!hasActiveDrawerForTab || anyBlockingModalOpen) return;
+
+    const edgeGesture = {
+      active: false,
+      startX: 0,
+      startY: 0,
+    };
+
+    const startIfRightEdge = (clientX: number, clientY: number, target: EventTarget | null) => {
+      const el = target as HTMLElement | null;
+      if (el && el.closest('input[type="range"]')) return;
+      if (clientX >= window.innerWidth - 36) {
+        edgeGesture.active = true;
+        edgeGesture.startX = clientX;
+        edgeGesture.startY = clientY;
+      } else {
+        edgeGesture.active = false;
+      }
+    };
+
+    const checkEdgeSwipe = (clientX: number, clientY: number) => {
+      if (!edgeGesture.active) return;
+      const dx = clientX - edgeGesture.startX;
+      const dy = clientY - edgeGesture.startY;
+      if (Math.abs(dy) > 22 && Math.abs(dy) > Math.abs(dx)) {
+        edgeGesture.active = false;
+        return;
+      }
+      if (dx <= -24 && Math.abs(dx) > Math.abs(dy) * 1.15) {
+        edgeGesture.active = false;
+        openActiveTabDrawer();
+      }
+    };
+
+    const resetEdgeGesture = () => {
+      edgeGesture.active = false;
+    };
+
+    const onTouchStart = (e: TouchEvent) => {
+      const t = e.touches[0];
+      if (t) startIfRightEdge(t.clientX, t.clientY, e.target);
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      const t = e.touches[0];
+      if (t) checkEdgeSwipe(t.clientX, t.clientY);
+    };
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      startIfRightEdge(e.clientX, e.clientY, e.target);
+    };
+    const onPointerMove = (e: PointerEvent) => {
+      checkEdgeSwipe(e.clientX, e.clientY);
+    };
+
+    window.addEventListener('touchstart', onTouchStart, { passive: true });
+    window.addEventListener('touchmove', onTouchMove, { passive: true });
+    window.addEventListener('touchend', resetEdgeGesture, { passive: true });
+    window.addEventListener('touchcancel', resetEdgeGesture, { passive: true });
+    window.addEventListener('pointerdown', onPointerDown, { passive: true });
+    window.addEventListener('pointermove', onPointerMove, { passive: true });
+    window.addEventListener('pointerup', resetEdgeGesture, { passive: true });
+
+    return () => {
+      window.removeEventListener('touchstart', onTouchStart);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', resetEdgeGesture);
+      window.removeEventListener('touchcancel', resetEdgeGesture);
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', resetEdgeGesture);
+    };
+  }, [
+    hasActiveDrawerForTab,
+    isCurrentTabDrawerOpen,
+    openActiveTabDrawer,
+    isEditorModalOpen,
+    isAiCinemaOpen,
+    isStylingDrawerOpen,
+    isPreviewSpaceOpen,
+    isGoogleSettingsOpen,
+    isAiConfigOpen,
+    isUnifiedDownloadOpen,
+    isFindReplaceOpen,
+    isTimeShiftOpen,
+    isGapTimingOpen,
+    isTextCleanupOpen,
+    isWatermarkModalOpen,
+    isStylizerOpen,
+    isTranslationSettingsModalOpen,
+    isTextResizeOpen,
+    isFontsOpen,
+  ]);
+
+  const TAB_ITEMS: { id: MobileTab; label: string; shortLabel: string; icon: any }[] = [
+    { id: 'home', label: 'Home', shortLabel: 'Home', icon: Home },
+    { id: 'translator', label: 'Translate', shortLabel: 'Translate', icon: Sparkles },
+    { id: 'workspace', label: 'Workspace', shortLabel: 'Workspace', icon: Languages },
+    { id: 'styling', label: 'Styling', shortLabel: 'Styling', icon: Palette },
+    { id: 'download', label: 'Export', shortLabel: 'Export', icon: Download },
+    { id: 'menu', label: 'Menu', shortLabel: 'Menu', icon: Settings },
+  ];
+
+  const useMobileCards = isMobileViewport && preferences.mobileSubtitleView !== 'table';
+  const showHeaderCompact = preferences.headerVisibility.compactMode;
+
+  const [isBottomNavVisible, setIsBottomNavVisible] = useState(true);
+  const [isKeyboardActive, setIsKeyboardActive] = useState(false);
+
+  const isAnyOverlayOpen =
+    isHomeDrawerOpen ||
+    isTranslatorDrawerOpen ||
+    isWorkspaceDrawerOpen ||
+    isTextResizeOpen ||
+    isFontsOpen ||
+    isOnScreenSlidersOpen ||
+    isEditorModalOpen ||
+    isAiCinemaOpen ||
+    isStylingDrawerOpen ||
+    isPreviewSpaceOpen ||
+    isGoogleSettingsOpen ||
+    isAiConfigOpen ||
+    isUnifiedDownloadOpen ||
+    isFindReplaceOpen ||
+    isTimeShiftOpen ||
+    isGapTimingOpen ||
+    isTextCleanupOpen ||
+    isWatermarkModalOpen ||
+    isStylizerOpen ||
+    isTranslationSettingsModalOpen ||
+    Boolean(confirmDialog) ||
+    Boolean(fieldActionMenu) ||
+    Boolean(columnHistoryMenu);
+
+  // Auto-hide bottom navigation bar on downward scroll, show on upward scroll
+  useEffect(() => {
+    setIsBottomNavVisible(true);
+  }, [activeTab]);
+
+  useEffect(() => {
+    let lastScrollY = typeof window !== 'undefined' ? window.scrollY : 0;
+    const onScroll = () => {
+      const currentY = window.scrollY;
+      const delta = currentY - lastScrollY;
+      if (currentY <= 30) {
+        setIsBottomNavVisible(true);
+      } else if (delta > 10 && currentY > 44) {
+        setIsBottomNavVisible(false);
+      } else if (delta < -8) {
+        setIsBottomNavVisible(true);
+      }
+      lastScrollY = currentY;
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  // Totally hide header & footer chrome when virtual keyboard / inline editing is active
+  useEffect(() => {
+    let blurTimer: ReturnType<typeof setTimeout> | null = null;
+    let baselineHeight = typeof window !== 'undefined' ? window.innerHeight : 0;
+
+    const isTextEditableEl = (el: EventTarget | null): boolean => {
+      if (!(el instanceof HTMLElement)) return false;
+      if (el.tagName === 'TEXTAREA') return true;
+      if (el.tagName === 'INPUT') {
+        const type = (el as HTMLInputElement).type?.toLowerCase() || 'text';
+        return !['checkbox', 'radio', 'range', 'file', 'color', 'button', 'submit', 'reset'].includes(type);
+      }
+      return el.isContentEditable;
+    };
+
+    const onFocusIn = (e: FocusEvent) => {
+      if (blurTimer) clearTimeout(blurTimer);
+      if (isTextEditableEl(e.target)) {
+        setIsKeyboardActive(true);
+      }
+    };
+
+    const onFocusOut = () => {
+      if (blurTimer) clearTimeout(blurTimer);
+      blurTimer = setTimeout(() => {
+        const vv = window.visualViewport;
+        const vvShrink = vv ? baselineHeight - vv.height > 130 : false;
+        setIsKeyboardActive(isTextEditableEl(document.activeElement) || vvShrink);
+      }, 85);
+    };
+
+    const onViewportResize = () => {
+      const vv = window.visualViewport;
+      if (!vv) return;
+      if (vv.height > baselineHeight) baselineHeight = vv.height;
+      const vvShrink = baselineHeight - vv.height > 130;
+      setIsKeyboardActive(vvShrink || isTextEditableEl(document.activeElement));
+    };
+
+    document.addEventListener('focusin', onFocusIn);
+    document.addEventListener('focusout', onFocusOut);
+    window.visualViewport?.addEventListener('resize', onViewportResize);
+
+    return () => {
+      if (blurTimer) clearTimeout(blurTimer);
+      document.removeEventListener('focusin', onFocusIn);
+      document.removeEventListener('focusout', onFocusOut);
+      window.visualViewport?.removeEventListener('resize', onViewportResize);
+    };
+  }, []);
+
+  // Reference-counted body scroll lock (guarantees scrolling unlocks cleanly whenever popups close)
+  useBodyScrollLock(isAnyOverlayOpen);
+
+  const showWorkspacePinnedFooter = activeTab === 'workspace' && filteredSubtitles.length > 0 && !isKeyboardActive;
 
   return (
-    <div 
+    <div
       className={cn(
-        "min-h-screen font-sans flex flex-col transition-colors duration-300 theme-root",
-        theme === 'classic' ? "bg-zinc-100 text-zinc-900" : "bg-zinc-900 text-zinc-100 dark"
+        'min-h-screen font-sans flex flex-col transition-colors duration-200 theme-root',
+        theme !== 'classic' && 'dark'
       )}
       style={{
+        backgroundColor: 'var(--theme-canvas)',
+        color: 'var(--theme-text)',
         '--translated-font-size': `${isGlobalFontActive ? globalFontSize : translatedFontSize}px`,
         '--original-font-size': `${isGlobalFontActive ? globalFontSize : originalFontSize}px`,
-        '--google-font-size': `${isGlobalFontActive ? Math.round(globalFontSize * 0.9) : googleFontSize}px`,
+        '--google-font-size': `${isGlobalFontActive ? globalFontSize : googleFontSize}px`,
         '--urdu-font': isGlobalFontActive ? globalFont : urduFont,
         '--original-font': isGlobalFontActive ? globalFont : originalFont,
-        '--google-font': isGlobalFontActive ? globalFont : googleFont
+        '--google-font': isGlobalFontActive ? globalFont : googleFont,
       } as React.CSSProperties}
     >
-      <AnimatePresence>
-        {notifications.map(n => (
-          <motion.div 
-            key={n.id}
-            initial={{ opacity: 0, x: 20, y: -20 }}
-            animate={{ opacity: 1, x: 0, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            className={cn(
-              "fixed top-6 right-6 z-[200] p-3.5 rounded-2xl shadow-xl border flex items-center gap-3 min-w-[260px]",
-              n.type === 'success' 
-                ? "bg-emerald-600 text-white border-emerald-500 shadow-emerald-950/20" 
-                : "bg-red-600 text-white border-red-500 shadow-red-950/20"
-            )}
-          >
-            {n.type === 'success' ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
-            <p className="text-xs font-bold leading-snug">{n.message}</p>
-          </motion.div>
-        ))}
-      </AnimatePresence>
-      {/* Header */}
-      <header className="sticky top-0 z-50 bg-white dark:bg-zinc-800 border-b border-zinc-200 dark:border-zinc-700/60 px-4 md:px-6 py-2.5 md:py-3 pt-safe flex items-center justify-between shadow-xs">
-        <div className="flex items-center gap-2.5 sm:gap-3">
-          <div className="w-8 h-8 sm:w-9 sm:h-9 bg-emerald-600 rounded-lg flex items-center justify-center text-white shadow-md shadow-emerald-100">
-            <Languages size={18} className="sm:w-5 sm:h-5" />
-          </div>
-          <div>
-            <h1 className="text-sm sm:text-lg font-bold tracking-tight text-zinc-900 dark:text-white flex items-center gap-1.5">
-              <span>Urdu Localizer</span>
-              <span className="text-emerald-600 font-medium text-xs sm:text-sm">v2.2</span>
-            </h1>
-            {fileName && <p className="text-[9px] sm:text-[10px] text-zinc-500 dark:text-zinc-400 font-mono truncate max-w-[150px] sm:max-w-[200px]">{fileName}</p>}
-          </div>
-        </div>
+      {/* Auto-Hide Toast Stack positioned clear of bottom nav, workspace footer, and bottom-right controls */}
+      <div
+        className={cn(
+          'fixed right-3 sm:right-5 z-[220] pb-safe flex flex-col gap-1.5 pointer-events-none max-w-[calc(100vw-24px)] mobile-fixed-chrome transition-[bottom] duration-150',
+          isKeyboardActive
+            ? 'bottom-3'
+            : activeTab === 'translator'
+            ? isBottomNavVisible
+              ? 'bottom-[216px] lg:bottom-[170px]'
+              : 'bottom-[170px] lg:bottom-[170px]'
+            : activeTab === 'workspace'
+            ? isBottomNavVisible
+              ? 'bottom-[168px] lg:bottom-[120px]'
+              : 'bottom-[120px] lg:bottom-[120px]'
+            : hasActiveDrawerForTab
+            ? isBottomNavVisible
+              ? 'bottom-[118px] lg:bottom-[76px]'
+              : 'bottom-[74px] lg:bottom-[76px]'
+            : isBottomNavVisible
+            ? 'bottom-[62px] lg:bottom-5'
+            : 'bottom-3 lg:bottom-5'
+        )}
+      >
+        <AnimatePresence>
+          {notifications.map((n) => {
+            const isWarn = n.type === 'warning';
+            const isErr = n.type === 'error' || n.type === 'not-saved';
+            const isSaved = n.type === 'saved';
+            return (
+              <motion.div
+                key={n.id}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.96 }}
+                className="pointer-events-auto px-3 py-2 rounded-xl border shadow-lg flex items-center gap-2 min-w-[200px] max-w-xs"
+                style={{
+                  backgroundColor: 'var(--theme-surface)',
+                  borderColor: isErr
+                    ? 'rgba(239, 68, 68, 0.45)'
+                    : isWarn
+                    ? 'rgba(245, 158, 11, 0.45)'
+                    : 'var(--theme-border)',
+                  color: 'var(--theme-text)',
+                }}
+              >
+                {isWarn ? (
+                  <AlertTriangle size={15} className="shrink-0 text-amber-500" />
+                ) : isErr ? (
+                  <AlertCircle size={15} className="shrink-0 text-red-500" />
+                ) : isSaved ? (
+                  <Save size={15} className="shrink-0" style={{ color: 'var(--theme-accent)' }} />
+                ) : (
+                  <CheckCircle2 size={15} className="shrink-0" style={{ color: 'var(--theme-accent)' }} />
+                )}
+                <p className="text-[11px] font-semibold leading-snug">{n.message}</p>
+              </motion.div>
+            );
+          })}
+        </AnimatePresence>
+      </div>
 
-        <div className="flex items-center gap-2 md:gap-3">
-          {/* Studio Drawer Action Buttons */}
-          <div className="hidden lg:flex items-center gap-2">
-            {/* AI Cinema Studio Drawer Button */}
-            <div className="flex items-center gap-0.5">
+      {/* Slim Top Header (totally hidden when keyboard is active for edits) */}
+      {!isKeyboardActive && (
+      <header
+        className={cn(
+          'sticky top-0 z-50 border-b px-3 sm:px-5 pt-safe flex items-center justify-between gap-2 backdrop-blur-md transition-all mobile-fixed-chrome overflow-x-clip',
+          showHeaderCompact ? 'min-h-[40px] py-1' : 'min-h-[46px] py-1.5',
+          isAnyOverlayOpen && 'pointer-events-none select-none'
+        )}
+        style={{
+          backgroundColor: 'var(--theme-header)',
+          borderColor: 'var(--theme-border)',
+          color: 'var(--theme-text)',
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => setActiveTab('home')}
+          className="flex items-center gap-2 text-left min-w-0 cursor-pointer"
+        >
+          <div
+            className="w-7 h-7 rounded-lg flex items-center justify-center text-white shrink-0 overflow-hidden"
+            style={{ backgroundColor: 'var(--theme-accent)' }}
+          >
+            {(() => {
+              const dev = preferences.developerSettings || DEFAULT_DEVELOPER_SETTINGS;
+              const iconSize = 15;
+              if (dev.iconId === 'custom' && dev.customIconDataUrl) {
+                return <img src={dev.customIconDataUrl} alt={dev.appName} className="w-full h-full object-cover" />;
+              }
+              if (dev.iconId === 'sparkles') return <Sparkles size={iconSize} />;
+              if (dev.iconId === 'clapperboard') return <Clapperboard size={iconSize} />;
+              if (dev.iconId === 'film') return <Film size={iconSize} />;
+              if (dev.iconId === 'globe') return <Globe size={iconSize} />;
+              return <Languages size={iconSize} />;
+            })()}
+          </div>
+          <div className="min-w-0">
+            <h1 className="font-semibold tracking-tight text-xs sm:text-[13px] flex items-center gap-1 truncate">
+              <span className="truncate">{preferences.developerSettings?.appName || 'Urdu Localizer'}</span>
+              {(preferences.developerSettings?.appBadge ?? 'v3') && (
+                <span className="font-mono text-[10px] font-semibold shrink-0" style={{ color: 'var(--theme-accent)' }}>
+                  {preferences.developerSettings?.appBadge ?? 'v3'}
+                </span>
+              )}
+            </h1>
+            {preferences.headerVisibility.showFileName && fileName && (
+              <p className="text-[9px] opacity-55 font-mono truncate max-w-[130px] sm:max-w-[220px]">{fileName}</p>
+            )}
+          </div>
+        </button>
+
+        <div className="flex items-center gap-1.5 shrink-0">
+          {/* Desktop Quick Studios */}
+          <div className="hidden lg:flex items-center gap-1">
+            {preferences.menuVisibility.showCinemaStudio && (
               <button
                 type="button"
                 onClick={() => setIsAiCinemaOpen(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-purple-500/10 to-indigo-500/10 hover:from-purple-500/20 hover:to-indigo-500/20 text-indigo-700 dark:text-indigo-300 rounded-xl border border-indigo-200 dark:border-indigo-800 transition-all text-xs font-bold cursor-pointer shadow-2xs"
-                title="AI Cinema Studio: Plot breakdowns, storyline insights, and reviews in Urdu & English"
+                className="min-h-[32px] flex items-center gap-1.5 px-2.5 rounded-lg border text-[11px] font-semibold cursor-pointer"
+                style={{
+                  backgroundColor: 'var(--theme-elevated)',
+                  borderColor: 'var(--theme-border)',
+                  color: 'var(--theme-text)',
+                }}
+                title="AI Cinema"
               >
-                <Clapperboard size={14} className="text-indigo-600 dark:text-indigo-400" />
-                <span>AI Cinema Studio</span>
+                <Clapperboard size={13} style={{ color: 'var(--theme-accent)' }} />
+                <span>Cinema</span>
               </button>
-              <InfoPopover
-                title="AI Cinema Studio"
-                description="Movie database intelligence workspace that collects movie/series info, breaks down plots, generates simplified storylines, and writes reviews in Urdu & English."
-                details={[
-                  "Can be pulled out from the left screen edge",
-                  "Preset prompts for instant analysis",
-                  "Export or apply insights directly to subtitle context"
-                ]}
-              />
-            </div>
-
-            {/* Styling Studio Drawer Button */}
-            <div className="flex items-center gap-0.5">
-              <button
-                type="button"
-                onClick={() => setIsStylingDrawerOpen(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-amber-500/10 to-rose-500/10 hover:from-amber-500/20 hover:to-rose-500/20 text-amber-800 dark:text-amber-300 rounded-xl border border-amber-200 dark:border-amber-800 transition-all text-xs font-bold cursor-pointer shadow-2xs"
-                title="Gradient Studio: Apply color gradient palettes and download stylized subtitles"
-              >
-                <Palette size={14} className="text-amber-600 dark:text-amber-400" />
-                <span>Styling Studio</span>
-              </button>
-              <InfoPopover
-                title="Styling Studio"
-                description="Full-screen stylizer drawer to apply color gradients, karaoke/glow animations, Urdu/English typography, and custom presets with simultaneous live preview."
-                details={[
-                  "Can be pulled out from the right screen edge",
-                  "Applies to AI, Google, or Original streams",
-                  "Download in SRT, SSA, ASS, and WebVTT formats"
-                ]}
-              />
-            </div>
-
-            {/* Preview Space Button */}
-            <div className="flex items-center gap-0.5">
-              <button
-                type="button"
-                onClick={() => setIsPreviewSpaceOpen(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/40 dark:hover:bg-blue-900/40 text-blue-800 dark:text-blue-300 rounded-xl border border-blue-200 dark:border-blue-800 transition-all text-xs font-bold cursor-pointer shadow-2xs"
-                title="Preview Space: Live playback and preview for all formatted subtitle streams"
-              >
-                <Play size={13} className="text-blue-600 dark:text-blue-400" />
-                <span>Preview Space</span>
-              </button>
-              <InfoPopover
-                title="Preview Space"
-                description="Dedicated cinema playback and simulation suite to preview and play saved changes in all formatted subtitle streams in real-time."
-                details={[
-                  "Interactive player with speed and timeline scrubber",
-                  "Cinema, Timeline, and Raw Code preview modes",
-                  "Instant export of any tested stream"
-                ]}
-              />
-            </div>
-
-            {/* Edit Studio Button */}
-            <div className="flex items-center gap-0.5">
+            )}
+            {preferences.menuVisibility.showEditStudio && (
               <button
                 type="button"
                 onClick={() => handleOpenEditor()}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/40 text-emerald-800 dark:text-emerald-300 rounded-xl border border-emerald-200 dark:border-emerald-800 transition-all text-xs font-bold cursor-pointer shadow-2xs"
-                title="Edit Studio: Edit original, AI, or Google translations with column checkboxes, swaps, and save/undo"
-              >
-                <Edit3 size={13} className="text-emerald-600 dark:text-emerald-400" />
-                <span>Edit Studio</span>
-              </button>
-              <InfoPopover
+                className="min-h-[32px] flex items-center gap-1.5 px-2.5 rounded-lg border text-[11px] font-semibold cursor-pointer"
+                style={{
+                  backgroundColor: 'var(--theme-elevated)',
+                  borderColor: 'var(--theme-border)',
+                  color: 'var(--theme-text)',
+                }}
                 title="Edit Studio"
-                description="Comprehensive editing studio with separate spaces for original subtitles, AI, and Google translations. Column visibility checkboxes, direct text editing, swapping, and Save All / Undo All."
-              />
-            </div>
+              >
+                <Edit3 size={13} style={{ color: 'var(--theme-accent)' }} />
+                <span>Studio</span>
+              </button>
+            )}
           </div>
 
-          {/* Settings and Configurations Drawer Button */}
-          <div className="flex items-center gap-0.5">
+          {preferences.headerVisibility.showZoomChip && (
             <button
               type="button"
-              onClick={() => setIsTranslationSettingsModalOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100/80 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/40 text-emerald-800 dark:text-emerald-300 rounded-xl border border-emerald-200 dark:border-emerald-800 transition-all text-xs font-bold shadow-2xs cursor-pointer group"
-              title="Settings & Configurations: Configure Target Language, Script Mode, Tone, and Formatting"
+              onClick={() => setIsOnScreenSlidersOpen((prev) => !prev)}
+              className="min-h-[32px] flex items-center gap-1 px-2 rounded-lg border text-[10px] font-mono font-semibold tabular-nums cursor-pointer"
+              style={{
+                backgroundColor: isOnScreenSlidersOpen ? 'var(--theme-accent-soft)' : 'var(--theme-elevated)',
+                borderColor: isOnScreenSlidersOpen ? 'var(--theme-accent)' : 'var(--theme-border)',
+              }}
+              title="Zoom & Spacing Sliders"
             >
-              <Sliders size={14} className="text-emerald-600 dark:text-emerald-400 group-hover:rotate-45 transition-transform" />
-              <span className="hidden sm:inline">Settings:</span>
-              <span className="px-1.5 py-0.5 rounded bg-emerald-200/70 dark:bg-emerald-900/60 text-[10px] font-mono font-bold text-emerald-900 dark:text-emerald-200">
-                {TARGET_LANGUAGES.find(l => l.code === translationSettings.targetLanguage)?.name || 'Urdu'} • {SCRIPT_MODES.find(s => s.id === translationSettings.scriptMode)?.badge || 'اردو'}
-              </span>
+              <ZoomIn size={12} style={{ color: 'var(--theme-accent)' }} />
+              <span>{preferences.uiZoom}%</span>
             </button>
-            <InfoPopover
-              title="Settings & Configurations"
-              description="Configure target language, script type (Nastaliq, Roman Urdu, Naskh), honorifics, tone registers, line breaking rules, and cultural filters."
-            />
-          </div>
+          )}
 
-          {/* Multi-Theme Selector (Classic, Cinematic, Cyber, Neon, Sapphire, Amber) */}
-          <ThemeSelector 
-            currentTheme={theme} 
-            onThemeChange={setTheme} 
-          />
-          
-          {/* Project Memory & Auto-Save Indicator */}
-          <div 
-            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-zinc-100 dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 text-[10px] font-medium"
-            title={saveStatus === 'saving' ? "Saving ongoing project state and stylings..." : "All changes, styles, themes, and settings are remembered and preserved until discarded."}
-          >
-            <span className={cn("w-1.5 h-1.5 rounded-full transition-colors", saveStatus === 'saving' ? "bg-amber-500 animate-ping" : "bg-emerald-500")} />
-            <span className="text-zinc-600 dark:text-zinc-300 select-none">
-              {saveStatus === 'saving' ? "Saving..." : "Project Saved"}
-            </span>
-          </div>
+          <ThemeSelector currentTheme={theme} onThemeChange={handleThemeChange} />
 
-          {/* Online / Offline Connectivity Pill */}
-          <div 
-            className={cn(
-              "flex items-center gap-1.5 px-2 sm:px-2.5 py-1 rounded-full text-[10px] font-bold border",
-              isOnline 
-                ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-700 dark:text-emerald-300" 
-                : "bg-amber-500/15 border-amber-500/30 text-amber-700 dark:text-amber-300"
-            )}
-            title={isOnline ? "Connected: Online translation active" : "Offline: Local subtitle parsing, editing & styling active on device"}
-          >
-            <span className={cn("w-1.5 h-1.5 rounded-full", isOnline ? "bg-emerald-500 animate-pulse" : "bg-amber-500")} />
-            <span className="hidden xs:inline">{isOnline ? 'Online' : 'Offline'}</span>
-          </div>
+          {preferences.headerVisibility.showSaveIndicator && (
+            <div
+              className="hidden md:flex items-center gap-1.5 px-2 min-h-[32px] rounded-lg border text-[10px] font-medium"
+              style={{
+                backgroundColor: 'var(--theme-elevated)',
+                borderColor: 'var(--theme-border)',
+              }}
+              title={saveStatus === 'saving' ? 'Saving...' : 'Saved locally'}
+            >
+              <span className={cn('w-1.5 h-1.5 rounded-full', saveStatus === 'saving' ? 'bg-amber-500' : 'bg-emerald-500')} />
+              <span>{saveStatus === 'saving' ? 'Saving' : 'Saved'}</span>
+            </div>
+          )}
 
-          {/* Android Mobile APK Button */}
+          {preferences.headerVisibility.showNetworkPill && (
+            <div
+              className="flex items-center gap-1 px-2 min-h-[32px] rounded-lg border text-[10px] font-medium"
+              style={{
+                backgroundColor: 'var(--theme-elevated)',
+                borderColor: 'var(--theme-border)',
+              }}
+              title={isOnline ? 'Online' : 'Offline'}
+            >
+              <span className={cn('w-1.5 h-1.5 rounded-full', isOnline ? 'bg-emerald-500' : 'bg-amber-500')} />
+              <span className="hidden xs:inline">{isOnline ? 'Online' : 'Offline'}</span>
+            </div>
+          )}
+
           <button
             type="button"
-            onClick={() => setIsAndroidGuideOpen(true)}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 rounded-xl border border-emerald-500/25 transition-all text-xs font-bold cursor-pointer"
-            title="Android App: Run natively on Android Phone, build APK & offline local mode"
+            onClick={() => setActiveTab('menu')}
+            className={cn(
+              'hidden lg:flex min-h-[32px] px-2 items-center gap-1 rounded-lg border transition-colors cursor-pointer',
+              activeTab === 'menu' ? 'text-white' : ''
+            )}
+            style={
+              activeTab === 'menu'
+                ? { backgroundColor: 'var(--theme-accent)', borderColor: 'var(--theme-accent)' }
+                : { backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }
+            }
+            title="Settings"
           >
-            <Smartphone size={14} className="text-emerald-600 dark:text-emerald-400" />
-            <span className="hidden sm:inline">Android App</span>
-          </button>
-
-          <div className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-emerald-50 dark:bg-emerald-950/40 rounded-full border border-emerald-200 dark:border-emerald-800/60">
-            <div className={cn("w-2 h-2 rounded-full animate-pulse", isGeminiConnected ? "bg-emerald-500" : "bg-red-500")} />
-            <span className="text-[10px] font-bold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider">
-              {isGeminiConnected ? 'Gemini Active' : 'Gemini Offline'}
-            </span>
-          </div>
-          <button 
-            onClick={() => setIsMenuOpen(true)} 
-            className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-700/60 rounded-lg transition-colors text-zinc-600 dark:text-zinc-300 cursor-pointer"
-            title="Open Studios & Settings Menu"
-          >
-            <Menu size={20} />
+            <Menu size={15} />
           </button>
         </div>
       </header>
+      )}
 
-      {/* Offline Mode Banner for Android & Mobile */}
-      {!isOnline && (
-        <div className="bg-amber-500/15 border-b border-amber-500/30 px-4 py-1.5 text-center text-xs font-medium text-amber-800 dark:text-amber-200 flex items-center justify-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
-          <span>Offline Mode Active • Local editing, typography styling, and file downloads are 100% available without internet.</span>
+      {/* Desktop Slim Underline Navigation Strip */}
+      {!isKeyboardActive && (
+      <nav
+        className={cn(
+          'hidden lg:flex items-center justify-center gap-1 px-6 border-b h-9',
+          isAnyOverlayOpen && 'pointer-events-none select-none'
+        )}
+        style={{
+          backgroundColor: 'var(--theme-surface)',
+          borderColor: 'var(--theme-border)',
+        }}
+      >
+        {TAB_ITEMS.map((tab) => {
+          const Icon = tab.icon;
+          const isActive = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setActiveTab(tab.id)}
+              className={cn(
+                'h-9 px-3.5 flex items-center gap-1.5 text-[11px] font-semibold transition-colors cursor-pointer border-b-2',
+                isActive ? 'opacity-100' : 'opacity-65 hover:opacity-100 border-transparent'
+              )}
+              style={
+                isActive
+                  ? { borderBottomColor: 'var(--theme-accent)', color: 'var(--theme-accent-text)' }
+                  : { color: 'var(--theme-text)' }
+              }
+            >
+              <Icon size={14} />
+              <span>{tab.label}</span>
+              {tab.id === 'translator' && (isTranslating || isGoogleTranslatingAll) && (
+                <Loader2 size={11} className="animate-spin" />
+              )}
+              {tab.id === 'workspace' && subtitles.length > 0 && (
+                <span className="text-[10px] font-mono opacity-70 tabular-nums">({subtitles.length})</span>
+              )}
+            </button>
+          );
+        })}
+      </nav>
+      )}
+
+      {/* Slim Offline Indicator */}
+      {!isOnline && !isKeyboardActive && (
+        <div
+          className="border-b px-3 py-1 text-center text-[11px] font-medium text-amber-500 flex items-center justify-center gap-1.5"
+          style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+        >
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
+          <span>Offline Mode · Local edits & exports remain active</span>
         </div>
       )}
 
-      {/* Sidebar/Menu */}
-      <AnimatePresence>
-        {isMenuOpen && (
-          <motion.div 
-            initial={{ opacity: 0, x: 300 }} 
-            animate={{ opacity: 1, x: 0 }} 
-            exit={{ opacity: 0, x: 300 }} 
-            className="fixed inset-y-0 right-0 w-80 bg-white dark:bg-zinc-800 shadow-2xl z-[60] p-8 border-l border-zinc-200 dark:border-zinc-700/60 flex flex-col overflow-y-auto"
+      {/* Main Content */}
+      <main
+        className={cn(
+          'flex-1 p-2.5 sm:p-4 md:p-5 max-w-[1600px] mx-auto w-full flex flex-col gap-3.5',
+          isKeyboardActive ? 'pb-6' : activeTab === 'workspace' ? 'pb-36 lg:pb-24' : 'pb-28 lg:pb-20',
+          isAnyOverlayOpen && 'pointer-events-none select-none'
+        )}
+      >
+        {error && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="p-3.5 bg-red-500/10 border border-red-500/30 rounded-2xl flex items-center gap-3 text-red-500 shadow-sm"
           >
-            <div className="flex items-center justify-between mb-4 shrink-0">
-              <h2 className="text-lg font-bold text-zinc-900 dark:text-white">Studios & Settings</h2>
-              <button onClick={() => setIsMenuOpen(false)} className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-700/60 rounded-full text-zinc-500 dark:text-zinc-400 cursor-pointer"><X size={20} /></button>
-            </div>
-
-            {/* Studio Spaces Launchers */}
-            <div className="space-y-2 mb-6 shrink-0">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-400 dark:text-zinc-500 mb-1.5">Dedicated Studios</p>
-              
-              <button
-                type="button"
-                onClick={() => {
-                  setIsMenuOpen(false);
-                  setIsAiCinemaOpen(true);
-                }}
-                className="w-full p-2.5 bg-gradient-to-r from-purple-500/10 to-indigo-500/10 hover:from-purple-500/20 hover:to-indigo-500/20 border border-indigo-200 dark:border-indigo-800 rounded-xl text-left flex items-center gap-2.5 transition-all cursor-pointer group"
-              >
-                <div className="p-2 rounded-lg bg-indigo-600 text-white shadow-2xs group-hover:scale-105 transition-transform">
-                  <Clapperboard size={15} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-bold text-zinc-900 dark:text-zinc-100">AI Cinema Studio</p>
-                  <p className="text-[10px] text-zinc-500 dark:text-zinc-400 truncate">Movie breakdowns & Urdu/English stories</p>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setIsMenuOpen(false);
-                  setIsStylingDrawerOpen(true);
-                }}
-                className="w-full p-2.5 bg-gradient-to-r from-rose-500/10 to-amber-500/10 hover:from-rose-500/20 hover:to-amber-500/20 border border-amber-200 dark:border-amber-800 rounded-xl text-left flex items-center gap-2.5 transition-all cursor-pointer group"
-              >
-                <div className="p-2 rounded-lg bg-rose-600 text-white shadow-2xs group-hover:scale-105 transition-transform">
-                  <Palette size={15} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-bold text-zinc-900 dark:text-zinc-100">Styling Studio</p>
-                  <p className="text-[10px] text-zinc-500 dark:text-zinc-400 truncate">Gradients, animations & stylized exports</p>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setIsMenuOpen(false);
-                  setIsPreviewSpaceOpen(true);
-                }}
-                className="w-full p-2.5 bg-blue-50/70 hover:bg-blue-100/70 dark:bg-blue-950/30 dark:hover:bg-blue-900/40 border border-blue-200 dark:border-blue-800 rounded-xl text-left flex items-center gap-2.5 transition-all cursor-pointer group"
-              >
-                <div className="p-2 rounded-lg bg-blue-600 text-white shadow-2xs group-hover:scale-105 transition-transform">
-                  <Play size={15} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-bold text-zinc-900 dark:text-zinc-100">Preview Space</p>
-                  <p className="text-[10px] text-zinc-500 dark:text-zinc-400 truncate">Live playback simulation across all streams</p>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setIsMenuOpen(false);
-                  handleOpenEditor();
-                }}
-                className="w-full p-2.5 bg-emerald-50/70 hover:bg-emerald-100/70 dark:bg-emerald-950/30 dark:hover:bg-emerald-900/40 border border-emerald-200 dark:border-emerald-800 rounded-xl text-left flex items-center gap-2.5 transition-all cursor-pointer group"
-              >
-                <div className="p-2 rounded-lg bg-emerald-600 text-white shadow-2xs group-hover:scale-105 transition-transform">
-                  <Edit3 size={15} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-bold text-zinc-900 dark:text-zinc-100">Edit Studio</p>
-                  <p className="text-[10px] text-zinc-500 dark:text-zinc-400 truncate">Column checkboxes, original editing & swaps</p>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setIsMenuOpen(false);
-                  setIsTranslationSettingsModalOpen(true);
-                }}
-                className="w-full p-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-xl text-left flex items-center gap-2.5 shadow-xs transition-all cursor-pointer group"
-              >
-                <div className="p-2 rounded-lg bg-white/20 text-white shadow-2xs">
-                  <Sliders size={15} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-bold text-white">Settings & Configurations</p>
-                  <p className="text-[10px] text-emerald-100 truncate">Language, Nastaliq, Roman Urdu & rules</p>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setIsMenuOpen(false);
-                  setIsAndroidGuideOpen(true);
-                }}
-                className="w-full p-2.5 bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-700/60 dark:hover:bg-zinc-700 text-zinc-900 dark:text-zinc-100 rounded-xl text-left flex items-center gap-2.5 border border-zinc-200 dark:border-zinc-600 transition-all cursor-pointer group"
-              >
-                <div className="p-2 rounded-lg bg-emerald-600 text-white shadow-2xs group-hover:scale-105 transition-transform">
-                  <Smartphone size={15} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-bold text-zinc-900 dark:text-zinc-100">Android Mobile APK Guide</p>
-                  <p className="text-[10px] text-zinc-500 dark:text-zinc-400 truncate">Install on phone • Offline local mode</p>
-                </div>
-              </button>
-            </div>
-            <div className="space-y-6 flex-1">
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="text-[10px] font-bold uppercase tracking-widest text-black/40 dark:text-white/40">AI Model Selection</label>
-                </div>
-                <select 
-                  value={selectedModel} 
-                  onChange={(e) => {
-                    const newModel = e.target.value;
-                    setSelectedModel(newModel);
-                    if (geminiRef.current) {
-                      geminiRef.current.updateConfig((customApiKey?.trim()) || (process.env.GEMINI_API_KEY as string), newModel);
-                      addLog(`Model switched to: ${newModel}`, "info");
-                    }
-                  }}
-                  className="w-full p-2.5 bg-black/5 dark:bg-white/5 rounded-xl text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-all mb-4 dark:text-white"
-                >
-                  <option value="gemini-3.8-flash">Gemini 3 Flash (Fast & Free Tier Recommended)</option>
-                  <option value="gemini-flash-latest">Gemini Flash Latest</option>
-                  <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash Lite (Ultra Low Latency)</option>
-                  <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (Requires Paid Project Tier)</option>
-                </select>
-
-                <label className="text-[10px] font-bold uppercase tracking-widest text-black/40 dark:text-white/40 mb-2 block">Gemini API Key</label>
-                <div className="flex gap-2 mb-4">
-                  <input 
-                    type="password"
-                    value={customApiKey}
-                    onChange={(e) => setCustomApiKey(e.target.value)}
-                    placeholder="Enter Gemini Key..."
-                    className="flex-1 p-2.5 bg-black/5 dark:bg-white/5 rounded-xl text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-all dark:text-white"
-                  />
-                  <button 
-                    onClick={connectGemini}
-                    className={`px-4 rounded-xl text-[10px] font-bold uppercase tracking-wider transition-all flex items-center gap-2 ${
-                      geminiConnectStatus === 'success' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400' : 
-                      geminiConnectStatus === 'failed' ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400' :
-                      geminiConnectStatus === 'loading' ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-400' :
-                      isGeminiConnected ? 'bg-emerald-600 text-white' : 'bg-indigo-600 text-white hover:bg-indigo-700'
-                    }`}
-                  >
-                    {geminiConnectStatus === 'loading' && <Loader2 size={12} className="animate-spin" />}
-                    {geminiConnectStatus === 'success' ? 'Connected!' : 
-                     geminiConnectStatus === 'failed' ? 'Failed' : 
-                     geminiConnectStatus === 'loading' ? 'Connecting...' :
-                     isGeminiConnected ? 'Connected' : 'Connect'}
-                  </button>
-                </div>
-
-                <label className="text-[10px] font-bold uppercase tracking-widest text-black/40 dark:text-white/40 mb-2 block">Google Cloud API Key</label>
-                <div className="flex gap-2 mb-4">
-                  <input 
-                    type="password"
-                    value={googleApiKey}
-                    onChange={(e) => setGoogleApiKey(e.target.value)}
-                    placeholder="Enter Google Key..."
-                    className="flex-1 p-2.5 bg-black/5 dark:bg-white/5 rounded-xl text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 transition-all dark:text-white"
-                  />
-                  <button 
-                    onClick={updateGoogleConfig}
-                    className={`px-4 rounded-xl text-[10px] font-bold uppercase tracking-wider transition-all flex items-center gap-2 ${
-                      googleConnectStatus === 'success' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400' : 
-                      googleConnectStatus === 'failed' ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400' :
-                      googleConnectStatus === 'loading' ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-400' :
-                      googleApiKey ? 'bg-blue-600 text-white' : 'bg-indigo-600 text-white hover:bg-indigo-700'
-                    }`}
-                  >
-                    {googleConnectStatus === 'loading' && <Loader2 size={12} className="animate-spin" />}
-                    {googleConnectStatus === 'success' ? 'Activated!' : 
-                     googleConnectStatus === 'failed' ? 'Failed' : 
-                     googleConnectStatus === 'loading' ? 'Activating...' :
-                     googleApiKey ? 'Activated' : 'Activate'}
-                  </button>
-                </div>
-
-                <div className="space-y-4 pt-4 border-t border-black/5 dark:border-white/5">
-                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-black/40 dark:text-white/40">Performance Tuning</h3>
-                  
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="text-[9px] font-bold uppercase tracking-wider text-black/30 dark:text-white/30 block mb-1">Gemini Workers</label>
-                      <input 
-                        type="number" 
-                        value={geminiWorkers} 
-                        onChange={e => setGeminiWorkers(Number(e.target.value))}
-                        className="w-full p-2 bg-black/5 dark:bg-white/5 rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:text-white"
-                        min="1" max="20"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[9px] font-bold uppercase tracking-wider text-black/30 dark:text-white/30 block mb-1">Gemini Batch</label>
-                      <input 
-                        type="number" 
-                        value={geminiBatchSize} 
-                        onChange={e => setGeminiBatchSize(Number(e.target.value))}
-                        className="w-full p-2 bg-black/5 dark:bg-white/5 rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:text-white"
-                        min="1" max="50"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[9px] font-bold uppercase tracking-wider text-black/30 dark:text-white/30 block mb-1">Gemini Delay (ms)</label>
-                      <input 
-                        type="number" 
-                        value={geminiDelay} 
-                        onChange={e => setGeminiDelay(Number(e.target.value))}
-                        className="w-full p-2 bg-black/5 dark:bg-white/5 rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:text-white"
-                        min="0" max="10000"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="text-[9px] font-bold uppercase tracking-wider text-black/30 dark:text-white/30 block mb-1">Google Workers</label>
-                      <input 
-                        type="number" 
-                        value={googleWorkers} 
-                        onChange={e => setGoogleWorkers(Number(e.target.value))}
-                        className="w-full p-2 bg-black/5 dark:bg-white/5 rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:text-white"
-                        min="1" max="100"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[9px] font-bold uppercase tracking-wider text-black/30 dark:text-white/30 block mb-1">Google Batch</label>
-                      <input 
-                        type="number" 
-                        value={googleBatchSize} 
-                        onChange={e => setGoogleBatchSize(Number(e.target.value))}
-                        className="w-full p-2 bg-black/5 dark:bg-white/5 rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:text-white"
-                        min="1" max="100"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex gap-2 mb-4">
-                  <button 
-                    onClick={restoreCache}
-                    className="flex-1 py-2.5 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 rounded-xl text-[10px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-2"
-                  >
-                    <Save size={14} /> Restore Cache
-                  </button>
-                  <button 
-                    onClick={refreshDownloadSession}
-                    className="flex-1 py-2.5 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 rounded-xl text-[10px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-2"
-                  >
-                    <RotateCcw size={14} /> Refresh Session
-                  </button>
-                </div>
-              </div>
-              
-              <div className="p-4 bg-zinc-50 dark:bg-zinc-900/60 rounded-xl border border-zinc-200 dark:border-zinc-700/60 space-y-3">
-                <div className="flex items-center justify-between mb-1">
-                  <div className="flex items-center gap-2">
-                    <BarChart3 size={14} className="text-emerald-600 dark:text-emerald-400" />
-                    <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-600 dark:text-zinc-300">Project Stats</span>
-                  </div>
-                  <span className="text-[8px] font-mono text-zinc-400 dark:text-zinc-500">{sessionId}</span>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="text-center p-2 bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700/60">
-                    <p className="text-[8px] font-bold text-zinc-400 dark:text-zinc-500 uppercase">Original Chars</p>
-                    <p className="text-sm font-bold text-zinc-900 dark:text-white">{projectStats.totalChars.toLocaleString()}</p>
-                  </div>
-                  <div className="text-center p-2 bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700/60">
-                    <p className="text-[8px] font-bold text-zinc-400 dark:text-zinc-500 uppercase">Urdu Chars</p>
-                    <p className="text-sm font-bold text-emerald-600 dark:text-emerald-400">{projectStats.totalUrduChars.toLocaleString()}</p>
-                  </div>
-                  <div className="text-center p-2 bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700/60">
-                    <p className="text-[8px] font-bold text-zinc-400 dark:text-zinc-500 uppercase">Total Indexes</p>
-                    <p className="text-sm font-bold text-zinc-900 dark:text-white">{projectStats.totalIndexes.toLocaleString()}</p>
-                  </div>
-                  <div className="text-center p-2 bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700/60">
-                    <p className="text-[8px] font-bold text-zinc-400 dark:text-zinc-500 uppercase">Est. Tokens</p>
-                    <p className="text-sm font-bold text-blue-600 dark:text-blue-400">{projectStats.estimatedTokens.toLocaleString()}</p>
-                  </div>
-                </div>
-                <div className="pt-2 border-t border-zinc-200 dark:border-zinc-700/60">
-                  <p className="text-[8px] font-bold text-zinc-400 dark:text-zinc-500 uppercase mb-1">Google Cloud Cache ID</p>
-                  <p className="text-[10px] font-mono text-zinc-600 dark:text-zinc-400 break-all">{sessionId}</p>
-                </div>
-              </div>
-
-              <div className="p-4 bg-emerald-50 dark:bg-emerald-900/20 rounded-xl border border-emerald-100 dark:border-emerald-500/20">
-                <p className="text-[11px] text-emerald-700 dark:text-emerald-400 leading-relaxed">Using Gemini 3.1 Pro with Web Search. Rate limit: 14 RPM.</p>
-              </div>
-            </div>
-            <button onClick={resetProject} className="w-full py-3 flex items-center justify-center gap-2 text-red-500 hover:bg-red-50 rounded-xl transition-all font-bold text-sm border border-red-100 mt-4">
-              <Trash2 size={16} /> Discard Data
+            <AlertCircle size={18} className="shrink-0" />
+            <p className="text-xs font-bold flex-1">{error}</p>
+            <button onClick={() => setError(null)} className="p-1 hover:bg-red-500/10 rounded-full cursor-pointer">
+              <X size={14} />
             </button>
           </motion.div>
         )}
-      </AnimatePresence>
 
-      <main className="flex-1 p-3 sm:p-4 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-5 md:gap-6 max-w-[1600px] mx-auto w-full pb-24 lg:pb-6">
-        
-        {/* Left Column: Controls & Context */}
-        <div className="lg:col-span-4 space-y-6 flex flex-col">
-          
-          {error && (
-            <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="p-4 bg-red-50 border border-red-100 rounded-2xl flex items-center gap-3 text-red-600 shadow-sm">
-              <AlertCircle size={18} />
-              <p className="text-xs font-bold">{error}</p>
-              <button onClick={() => setError(null)} className="ml-auto p-1 hover:bg-red-100 rounded-full"><X size={14} /></button>
-            </motion.div>
-          )}
-          
-          {/* Upload & Stats */}
-          <div className="bg-white dark:bg-zinc-800 p-6 rounded-2xl border border-zinc-200 dark:border-zinc-700/60 shadow-xs space-y-6">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-bold uppercase tracking-widest text-zinc-500 dark:text-zinc-400">Project Controls</h3>
-              <BarChart3 size={16} className="text-zinc-400 dark:text-zinc-500" />
-            </div>
-            
-            <div className="relative">
-              {fileName ? (
-                <div className="border-2 border-emerald-500/30 bg-emerald-50/50 dark:bg-emerald-950/20 rounded-2xl p-5 flex flex-col items-center justify-center gap-3 transition-all">
-                  <div className="flex items-center gap-2">
-                    <FileText size={28} className="text-emerald-500" />
-                    {detectedFormat && (
-                      <span className="px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 font-mono text-[9px] font-bold border border-emerald-300 dark:border-emerald-700 shadow-2xs">
-                        {detectedFormat}
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-center">
-                    <p className="text-xs font-bold text-zinc-800 dark:text-zinc-200 truncate max-w-[220px]" title={fileName}>{fileName}</p>
-                    <p className="text-[10px] text-zinc-500 dark:text-zinc-400 uppercase font-bold tracking-tight mt-0.5">{stats.total} subtitle segments loaded</p>
-                  </div>
-                  <button 
-                    onClick={resetProject}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 rounded-lg text-[10px] font-bold uppercase tracking-wider hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors border border-red-200 dark:border-red-900/50 cursor-pointer"
-                  >
-                    <Trash2 size={12} /> Discard Project
-                  </button>
-                </div>
-              ) : (
-                <label 
-                  onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const file = e.dataTransfer.files?.[0];
-                    if (file) {
-                      processSubtitleFile(file);
-                    }
-                  }}
-                  className="block cursor-pointer group"
-                >
-                  <input 
-                    type="file" 
-                    accept=".srt,.vtt,.ass,.ssa,.sbv,.lrc,.json,.txt,text/vtt,text/plain,application/json" 
-                    onChange={handleFileUpload} 
-                    className="hidden" 
-                  />
-                  <div className="border-2 border-dashed border-zinc-300 dark:border-zinc-700 rounded-2xl p-5 text-center group-hover:border-emerald-500 group-hover:bg-emerald-50/30 dark:group-hover:bg-emerald-950/20 transition-all">
-                    <Upload size={24} className="mx-auto mb-2 text-zinc-400 dark:text-zinc-500 group-hover:text-emerald-500" />
-                    <span className="text-xs font-bold text-zinc-800 dark:text-zinc-200 block mb-1">Upload Subtitles & Online Captions</span>
-                    <span className="text-[10px] text-zinc-500 dark:text-zinc-400 block mb-2">Drop file or click to browse (Android & Online compatible)</span>
-                    <div className="flex flex-wrap items-center justify-center gap-1 max-w-[280px] mx-auto">
-                      <span className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-[8.5px] font-mono font-bold text-zinc-600 dark:text-zinc-400">SRT</span>
-                      <span className="px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/70 text-[8.5px] font-mono font-bold text-emerald-700 dark:text-emerald-300">VTT (Web)</span>
-                      <span className="px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-950/70 text-[8.5px] font-mono font-bold text-indigo-700 dark:text-indigo-300">ASS (Android)</span>
-                      <span className="px-1.5 py-0.5 rounded bg-red-100 dark:bg-red-950/70 text-[8.5px] font-mono font-bold text-red-700 dark:text-red-300">SBV (YouTube)</span>
-                      <span className="px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950/70 text-[8.5px] font-mono font-bold text-amber-700 dark:text-amber-300">LRC (Lyrics)</span>
-                      <span className="px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-950/70 text-[8.5px] font-mono font-bold text-purple-700 dark:text-purple-300">JSON</span>
-                      <span className="px-1.5 py-0.5 rounded bg-sky-100 dark:bg-sky-950/70 text-[8.5px] font-mono font-bold text-sky-700 dark:text-sky-300">TXT</span>
-                    </div>
-                  </div>
-                </label>
-              )}
-              {!fileName && (
-                <button
-                  type="button"
-                  onClick={loadSampleSubtitles}
-                  className="w-full mt-2.5 py-2 px-3 rounded-xl bg-emerald-50 hover:bg-emerald-100/80 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/60 border border-emerald-300 dark:border-emerald-700 text-emerald-800 dark:text-emerald-300 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
-                >
-                  <Sparkles size={13} className="text-emerald-600 dark:text-emerald-400" />
-                  <span>Load Cinematic Demo Subtitles</span>
-                </button>
-              )}
-            </div>
+        {activeTab === 'home' && (
+          <HomeTabView
+            fileName={fileName}
+            detectedFormat={detectedFormat}
+            subtitlesCount={stats.total}
+            translatedCount={stats.translated}
+            googleCount={stats.google}
+            activeDraftId={activeDraftId}
+            drafts={drafts}
+            crashSnapshot={crashSnapshot}
+            onRecoverCrash={handleRecoverCrash}
+            onDismissCrash={handleDismissCrash}
+            onUploadFile={processSubtitleFile}
+            onLoadFromUrl={handleLoadFromUrl}
+            onLoadDemo={loadSampleSubtitles}
+            onSaveCurrentAsDraft={handleSaveCurrentAsDraft}
+            onLoadDraft={handleLoadDraft}
+            onDuplicateDraft={handleDuplicateDraft}
+            onDeleteDraft={handleDeleteDraft}
+            onOpenWorkspace={() => setActiveTab('workspace')}
+            onDiscardProject={resetProject}
+            onOpenAiCinema={() => setIsAiCinemaOpen(true)}
+          />
+        )}
 
-            <div className="grid grid-cols-2 gap-3">
-              <div className="p-3 bg-zinc-50 dark:bg-zinc-900/50 rounded-xl border border-zinc-200 dark:border-zinc-700/60">
-                <p className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase mb-1">Translated</p>
-                <p className="text-xl font-bold text-emerald-600 dark:text-emerald-400">{stats.translated}<span className="text-xs text-zinc-400 dark:text-zinc-500 ml-1">/ {stats.total}</span></p>
-              </div>
-              <div className="p-3 bg-zinc-50 dark:bg-zinc-900/50 rounded-xl border border-zinc-200 dark:border-zinc-700/60">
-                <p className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase mb-1">Google Comp</p>
-                <p className="text-xl font-bold text-blue-600 dark:text-blue-400">{stats.google}<span className="text-xs text-zinc-400 dark:text-zinc-500 ml-1">/ {stats.total}</span></p>
-              </div>
-            </div>
-
-            {/* Active Translation Profile Card */}
-            <div className="p-3 bg-gradient-to-br from-emerald-500/10 via-teal-500/5 to-indigo-500/10 border border-emerald-500/25 dark:border-emerald-500/20 rounded-xl flex items-center justify-between gap-2 shadow-2xs">
-              <div className="flex items-center gap-2.5 min-w-0">
-                <div className="p-2 rounded-lg bg-emerald-600 text-white shrink-0 shadow-2xs">
-                  <Sliders size={14} />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100 truncate">
-                      {TARGET_LANGUAGES.find(l => l.code === translationSettings.targetLanguage)?.name || 'Urdu'}
-                    </span>
-                    <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 font-bold border border-emerald-300 dark:border-emerald-800">
-                      {SCRIPT_MODES.find(s => s.id === translationSettings.scriptMode)?.badge || 'اردو'}
-                    </span>
-                  </div>
-                  <p className="text-[10px] text-zinc-500 dark:text-zinc-400 truncate mt-0.5">
-                    {TONE_REGISTERS.find(t => t.id === translationSettings.toneRegister)?.label} • {HONORIFIC_OPTIONS.find(h => h.id === translationSettings.honorificRegister)?.label}
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsTranslationSettingsModalOpen(true)}
-                className="px-2.5 py-1.5 bg-white dark:bg-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-700 text-emerald-700 dark:text-emerald-400 rounded-lg text-[10px] font-bold border border-emerald-300 dark:border-emerald-800 shadow-2xs shrink-0 cursor-pointer transition-all"
-              >
-                Configure
-              </button>
-            </div>
-
-            {/* Unified Configuration Fast-Bar */}
-            <div className="grid grid-cols-2 gap-2">
-              <div className="flex items-center gap-1.5 p-1 bg-zinc-100/80 dark:bg-zinc-800/80 rounded-xl border border-zinc-200 dark:border-zinc-700/60">
-                <button
-                  type="button"
-                  onClick={() => setIsAiConfigOpen(true)}
-                  className="flex-1 py-1.5 px-2 bg-white dark:bg-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-600 text-indigo-700 dark:text-indigo-300 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer truncate"
-                  title="Configure AI model, key, workers, batch, and throttle delay"
-                >
-                  <Cpu size={13} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
-                  <span className="truncate">AI Config</span>
-                </button>
-                <InfoPopover
-                  title="AI Configuration"
-                  description="Unified settings for Gemini AI models, authentication keys, parallel worker concurrency, batch sizing, and delay throttling."
-                  details={[
-                    `Current Model: ${selectedModel}`,
-                    `Workers: ${geminiWorkers} threads, Batch: ${geminiBatchSize}`,
-                    "Live connection test and latency verification"
-                  ]}
-                  align="left"
-                />
-              </div>
-
-              <div className="flex items-center gap-1.5 p-1 bg-zinc-100/80 dark:bg-zinc-800/80 rounded-xl border border-zinc-200 dark:border-zinc-700/60">
-                <button
-                  type="button"
-                  onClick={() => setIsGoogleSettingsOpen(true)}
-                  className="flex-1 py-1.5 px-2 bg-white dark:bg-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-600 text-blue-700 dark:text-blue-300 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer truncate"
-                  title="Configure Google Translate source language, key, workers, and batch"
-                >
-                  <Languages size={13} className="text-blue-600 dark:text-blue-400 shrink-0" />
-                  <span className="truncate">Google Config</span>
-                </button>
-                <InfoPopover
-                  title="Google Translate Settings"
-                  description="Unified configuration for Google Translate: source language auto-detection, Urdu and English translation parameters, optional API key, and concurrency tuning."
-                  details={[
-                    "Auto-detect source language to Urdu & English",
-                    `Workers: ${googleWorkers}, Batch: ${googleBatchSize}`,
-                    "Custom Cloud Translation key support"
-                  ]}
-                  align="right"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              {/* AI Translation Button */}
-              <div className="flex items-center gap-1.5">
-                <div className="flex-1 flex gap-2">
-                  <button 
-                    onClick={startTranslation} 
-                    disabled={isTranslating || subtitles.length === 0} 
-                    className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-100 dark:shadow-none hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
-                    title="Translate all subtitles using Google Gemini AI"
-                  >
-                    {isTranslating ? <Loader2 size={18} className="animate-spin" /> : <ChevronRight size={18} />}
-                    <span>{isTranslating ? `AI: ${translationSpeed} i/s` : stats.translated > 0 ? 'Resume AI Translation' : 'AI Translation'}</span>
-                  </button>
-                  {isTranslating && (
-                    <button 
-                      onClick={stopTranslation}
-                      className="px-4 bg-red-50 text-red-600 dark:bg-red-950/40 dark:text-red-400 rounded-xl font-bold border border-red-200 dark:border-red-800 hover:bg-red-100 transition-all cursor-pointer"
-                      title="Stop AI translation immediately"
-                    >
-                      Stop
-                    </button>
-                  )}
-                </div>
-                <InfoPopover
-                  title="AI Translation Button"
-                  description="Translates the entire subtitle timeline with Google Gemini. Delivers idiomatic Urdu, cultural nuances, proper honorifics, and preserves line breaks."
-                  details={[
-                    "Selected model: " + selectedModel,
-                    "Multi-worker parallel streaming",
-                    "Resume anytime without losing completed rows"
-                  ]}
-                  shortcut="Shift + Enter"
-                  align="right"
-                />
-              </div>
-
-              {/* Google Translate Button */}
-              <div className="flex items-center gap-1.5">
-                <div className="flex-1 flex gap-2">
-                  <button 
-                    onClick={translateAllGoogle} 
-                    disabled={isGoogleTranslatingAll || subtitles.length === 0} 
-                    className="flex-1 py-2.5 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 rounded-xl font-bold text-xs border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 transition-all flex items-center justify-center gap-2 disabled:opacity-50 relative overflow-hidden cursor-pointer"
-                    title="Machine translate all subtitles using Google Translate"
-                  >
-                    {isGoogleTranslatingAll ? <Loader2 size={14} className="animate-spin" /> : <Languages size={14} />}
-                    <span>{isGoogleTranslatingAll ? `Google: ${translationSpeed} i/s` : 'Google Translate'}</span>
-                  </button>
-                  {isGoogleTranslatingAll && (
-                    <button 
-                      onClick={stopGoogleTranslate}
-                      className="px-3 bg-red-50 text-red-600 dark:bg-red-950/40 dark:text-red-400 rounded-xl font-bold text-[10px] border border-red-200 dark:border-red-800 hover:bg-red-100 transition-all cursor-pointer"
-                      title="Stop Google translate immediately"
-                    >
-                      Stop
-                    </button>
-                  )}
-                </div>
-                <InfoPopover
-                  title="Google Translate Button"
-                  description="Fast machine translation engine for all subtitle rows. Auto-detects input language and converts to Urdu or English for rapid draft generation."
-                  details={[
-                    "High-speed batch translation",
-                    "Populates Google Comparison column",
-                    "Easily copy or swap with AI in Edit Studio"
-                  ]}
-                  align="right"
-                />
-              </div>
-
-              {/* Unified Download Button */}
-              <div className="flex items-center gap-1.5 pt-0.5">
-                <button
-                  type="button"
-                  onClick={() => setIsUnifiedDownloadOpen(true)}
-                  disabled={subtitles.length === 0}
-                  className="flex-1 py-2.5 bg-zinc-900 hover:bg-black text-white dark:bg-zinc-700 dark:hover:bg-zinc-600 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-xs cursor-pointer disabled:opacity-50"
-                  title="Unified download menu: Formatted SRT, Plain SRT, ASS, SSA, WebVTT, YouTube, LRC, TXT, JSON"
-                >
-                  <Download size={14} className="text-emerald-400" />
-                  <span>Download Subtitles (All Formats)</span>
-                </button>
-                <InfoPopover
-                  title="Unified Download Button"
-                  description="Unified export studio providing all industry formats in one place: Formatted SRT, Plain Clean SRT, Advanced SubStation Alpha (.ass), SubStation Alpha (.ssa), WebVTT (.vtt), YouTube SBV, Mobile Lyrics (.lrc), Android Text (.txt), JSON, and WhatsApp clipboard copy."
-                  details={[
-                    "Select stream: AI Urdu, Google, or Original",
-                    "Full SSA v4 & ASS v4+ formatting support",
-                    "Clean plain text or formatted styles"
-                  ]}
-                  align="right"
-                />
-              </div>
-
-              {/* Styling Studio Drawer Button */}
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => setIsStylingDrawerOpen(true)}
-                  disabled={subtitles.length === 0}
-                  className="flex-1 py-2.5 bg-gradient-to-r from-amber-500/15 via-rose-500/15 to-indigo-500/15 border border-amber-300 dark:border-amber-700/60 hover:from-amber-500/25 hover:to-indigo-500/25 text-amber-800 dark:text-amber-200 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-2xs cursor-pointer disabled:opacity-50"
-                  title="Open Gradient Studio: Color gradients and designer palettes"
-                >
-                  <Palette size={14} className="text-amber-500" />
-                  <span>Gradient Studio (Colors & Palettes)</span>
-                </button>
-                <InfoPopover
-                  title="Styling Studio"
-                  description="Design beautiful color gradients, karaoke glow animations, typography for English & Urdu, and export stylized subtitles in all formats."
-                  details={[
-                    "Live simultaneous preview playback",
-                    "Built-in cinema & neon presets",
-                    "Save and load custom presets"
-                  ]}
-                  align="right"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Gemini Usage Quota & Rate Analytics Dashboard */}
-          <GeminiQuotaDashboard 
+        {activeTab === 'translator' && (
+          <TranslatorTabView
+            subtitlesCount={stats.total}
+            translatedCount={stats.translated}
+            googleCount={stats.google}
+            untranslatedCount={Math.max(0, stats.total - stats.translated)}
             isTranslating={isTranslating}
-            subtitlesCount={subtitles.length}
-            untranslatedCount={subtitles.filter(s => !s.translatedText).length}
-            geminiBatchSize={geminiBatchSize}
+            isGoogleTranslatingAll={isGoogleTranslatingAll}
+            translationSpeed={translationSpeed}
+            isGeminiConnected={isGeminiConnected}
+            selectedModel={selectedModel}
             geminiWorkers={geminiWorkers}
+            geminiBatchSize={geminiBatchSize}
             geminiDelay={geminiDelay}
-            hasContext={Boolean(context && context.length > 50)}
+            googleWorkers={googleWorkers}
+            googleBatchSize={googleBatchSize}
             adaptiveScalingEnabled={adaptiveScalingEnabled}
-            onToggleAdaptiveScaling={setAdaptiveScalingEnabled}
             activeAdaptiveInfo={activeAdaptiveInfo}
+            onToggleAdaptiveScaling={setAdaptiveScalingEnabled}
             onUpdateWorkers={setGeminiWorkers}
             onUpdateBatchSize={setGeminiBatchSize}
+            translationSettings={translationSettings}
+            context={context}
+            customPrompt={customPrompt}
+            analyzeStatus={analyzeStatus}
+            isGeneratingContext={isGeneratingContext}
+            workerStates={workerStates}
+            isWorkerMonitorOpen={isWorkerMonitorOpen}
+            onToggleWorkerMonitor={() => setIsWorkerMonitorOpen(prev => !prev)}
+            onStartTranslation={startTranslation}
+            onStopTranslation={stopTranslation}
+            onStartGoogleTranslate={translateAllGoogle}
+            onStopGoogleTranslate={stopGoogleTranslate}
+            onOpenTranslationSettings={() => {
+              setFocusedSettingsCategory('translation');
+              setFocusedTranslationSub('language');
+              setActiveTab('menu');
+            }}
+            onOpenAiConfig={() => {
+              setFocusedSettingsCategory('translation');
+              setFocusedTranslationSub('ai');
+              setActiveTab('menu');
+            }}
+            onOpenGoogleConfig={() => {
+              setFocusedSettingsCategory('translation');
+              setFocusedTranslationSub('google');
+              setActiveTab('menu');
+            }}
+            onAnalyzeSubtitles={analyzeSubtitles}
+            onChangeContext={setContext}
+            onChangeCustomPrompt={setCustomPrompt}
+            onRestoreDefaultPrompt={restoreDefaultPrompt}
+            enableTermGlossary={preferences.optionalFeatures.enableTermGlossary}
+            glossary={glossary}
+            onChangeGlossary={setGlossary}
           />
+        )}
 
-          {/* Worker Monitor Panel */}
-          <AnimatePresence>
-            {isWorkerMonitorOpen && (isTranslating || isGoogleTranslatingAll) && (
-              <motion.div 
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 10 }}
-                className="bg-white dark:bg-zinc-800 p-4 rounded-2xl border border-zinc-200 dark:border-zinc-700/60 shadow-lg space-y-3"
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <Activity size={16} className="text-emerald-600 dark:text-emerald-400" />
-                    <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-600 dark:text-zinc-300">Parallel Worker Monitor</span>
-                  </div>
-                  <button onClick={() => setIsWorkerMonitorOpen(false)} className="p-1 hover:bg-zinc-100 dark:hover:bg-zinc-700 rounded-full text-zinc-400"><X size={14} /></button>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 max-h-48 overflow-y-auto custom-scrollbar p-1">
-                  {Object.entries(workerStates).map(([key, state]) => (
-                    <div key={key} className="p-2 bg-zinc-50 dark:bg-zinc-900/50 rounded-lg border border-zinc-200 dark:border-zinc-700/60 flex flex-col gap-1">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[8px] font-bold text-zinc-500 dark:text-zinc-400 uppercase truncate">{key.split('-').pop()}</span>
-                        <div className={`w-1.5 h-1.5 rounded-full ${state.status === 'working' ? 'bg-emerald-500 animate-pulse' : state.status === 'completed' ? 'bg-zinc-300 dark:bg-zinc-600' : 'bg-zinc-200 dark:bg-zinc-700'}`} />
-                      </div>
-                      {state.currentItem && (
-                        <span className="text-[10px] font-mono font-bold text-zinc-700 dark:text-zinc-300">#{state.currentItem}</span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
+        {activeTab === 'styling' && (
+          <StylingTabView
+            subtitles={subtitles}
+            subtitlesCount={subtitles.length}
+            activeStylingConfig={activeStylingConfig}
+            onOpenStylingDrawer={() => setIsStylingDrawerOpen(true)}
+            onOpenWatermark={() => setIsWatermarkModalOpen(true)}
+            onBakeAllStyles={() => handleBakeAllStyles(false)}
+            urduFont={urduFont}
+            originalFont={originalFont}
+            googleFont={googleFont}
+            globalFont={globalFont}
+            isGlobalFontActive={isGlobalFontActive}
+            translatedFontSize={translatedFontSize}
+            originalFontSize={originalFontSize}
+            googleFontSize={googleFontSize}
+            globalFontSize={globalFontSize}
+            localFonts={localFonts}
+            isUploadingFont={isUploadingFont}
+            onUpdateUrduFont={(font) => { setUrduFont(font); setHasPendingStyleBake(true); }}
+            onUpdateOriginalFont={(font) => { setOriginalFont(font); setHasPendingStyleBake(true); }}
+            onUpdateGoogleFont={(font) => { setGoogleFont(font); setHasPendingStyleBake(true); }}
+            onUpdateGlobalFont={(font) => { setGlobalFont(font); setHasPendingStyleBake(true); }}
+            onToggleGlobalFont={(active) => { setIsGlobalFontActive(active); setHasPendingStyleBake(true); }}
+            onUpdateTranslatedFontSize={(size) => { setTranslatedFontSize(size); setHasPendingStyleBake(true); }}
+            onUpdateOriginalFontSize={(size) => { setOriginalFontSize(size); setHasPendingStyleBake(true); }}
+            onUpdateGoogleFontSize={(size) => { setGoogleFontSize(size); setHasPendingStyleBake(true); }}
+            onUpdateGlobalFontSize={(size) => { setGlobalFontSize(size); setHasPendingStyleBake(true); }}
+            onUploadFontFile={handleUploadFontFile}
+          />
+        )}
 
-          {/* Context Editor */}
-          <ResizableBox 
-            title="Cultural Context" 
-            icon={Search} 
-            initialHeight={300} 
-            minHeight={150}
-            actions={
-              <button 
-                onClick={analyzeSubtitles}
-                disabled={isGeneratingContext || !isGeminiConnected || subtitles.length === 0}
-                className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[9px] font-bold uppercase tracking-wider transition-all disabled:opacity-50 ${
-                  analyzeStatus === 'success' ? 'bg-emerald-100 text-emerald-700' :
-                  analyzeStatus === 'failed' ? 'bg-red-100 text-red-700' :
-                  analyzeStatus === 'loading' ? 'bg-indigo-100 text-indigo-700' :
-                  'bg-indigo-50 text-indigo-700 hover:bg-indigo-100'
-                }`}
-              >
-                {analyzeStatus === 'loading' ? <Loader2 size={10} className="animate-spin" /> : 
-                 analyzeStatus === 'success' ? <Check size={10} /> :
-                 analyzeStatus === 'failed' ? <AlertCircle size={10} /> :
-                 <SearchCode size={10} />}
-                {analyzeStatus === 'loading' ? 'Analyzing...' :
-                 analyzeStatus === 'success' ? 'Analyzed!' :
-                 analyzeStatus === 'failed' ? 'Failed' :
-                 'Analyze Subtitles'}
-              </button>
-            }
-          >
-            <textarea 
-              value={context} 
-              onChange={(e) => setContext(e.target.value)} 
-              className="w-full h-full p-6 text-sm leading-relaxed focus:outline-none resize-none bg-transparent font-medium dark:text-white/80"
-              placeholder="AI context will appear here..."
-            />
-          </ResizableBox>
+        {activeTab === 'download' && (
+          <DownloadTabView
+            subtitles={subtitles}
+            fileName={fileName}
+            detectedFormat={detectedFormat}
+            translationSettings={translationSettings}
+            isTranslating={isTranslating}
+            isGoogleTranslatingAll={isGoogleTranslatingAll}
+            onDownloadFormatted={downloadFormattedSubtitles}
+            onRefreshDownloadSession={refreshDownloadSession}
+          />
+        )}
 
-          {/* Custom Prompt Editor */}
-          <ResizableBox 
-            title="Custom AI Instructions" 
-            icon={MessageSquare} 
-            initialHeight={200} 
-            minHeight={100}
-            actions={
-              <button onClick={restoreDefaultPrompt} className="text-[9px] font-bold text-emerald-600 hover:underline flex items-center gap-1">
-                <RotateCcw size={10} /> Restore Default
-              </button>
-            }
-          >
-            <textarea 
-              value={customPrompt} 
-              onChange={(e) => setCustomPrompt(e.target.value)} 
-              className="w-full h-full p-6 text-sm leading-relaxed focus:outline-none resize-none bg-transparent font-medium dark:text-white/80"
-              placeholder="Add custom instructions for the AI (e.g. 'Use formal language', 'Keep it funny')..."
-            />
-          </ResizableBox>
-        </div>
+        {activeTab === 'menu' && (
+          <MenuSettingsTabView
+            preferences={preferences}
+            onUpdatePreferences={updatePreferences}
+            onResetPreferences={handleResetPreferences}
+            onOpenOnScreenSliders={() => setIsOnScreenSlidersOpen(true)}
+            focusedCategory={focusedSettingsCategory}
+            focusedTranslationSub={focusedTranslationSub}
+            translationSettings={translationSettings}
+            onUpdateTranslationSettings={setTranslationSettings}
+            selectedModel={selectedModel}
+            onUpdateModel={(newModel) => {
+              setSelectedModel(newModel);
+              updateGeminiConfig(newModel);
+            }}
+            geminiApiKey={geminiApiKey}
+            onUpdateGeminiApiKey={setGeminiApiKey}
+            onApplyGeminiApiKey={(key) => { void handleApplyGeminiApiKey(key); }}
+            googleApiKey={googleApiKey}
+            onUpdateGoogleApiKey={setGoogleApiKey}
+            isGeminiConnected={isGeminiConnected}
+            geminiConnectStatus={geminiConnectStatus}
+            googleConnectStatus={googleConnectStatus}
+            onConnectGemini={() => { void connectGemini(); }}
+            onUpdateGoogleConfig={() => { void updateGoogleConfig(); }}
+            geminiWorkers={geminiWorkers}
+            onUpdateGeminiWorkers={setGeminiWorkers}
+            geminiBatchSize={geminiBatchSize}
+            onUpdateGeminiBatchSize={setGeminiBatchSize}
+            geminiDelay={geminiDelay}
+            onUpdateGeminiDelay={setGeminiDelay}
+            googleWorkers={googleWorkers}
+            onUpdateGoogleWorkers={setGoogleWorkers}
+            googleBatchSize={googleBatchSize}
+            onUpdateGoogleBatchSize={setGoogleBatchSize}
+            adaptiveScalingEnabled={adaptiveScalingEnabled}
+            onToggleAdaptiveScaling={setAdaptiveScalingEnabled}
+            storageBreakdown={storageBreakdown}
+            onRefreshStorageStats={refreshDraftsAndStats}
+            onDeleteDraftFromStorage={handleDeleteDraftFromStorage}
+            onClearCrashSnapshotFromStorage={handleClearCrashSnapshotFromStorage}
+            localFonts={localFonts}
+            onDeleteLocalFont={handleDeleteLocalFontById}
+            onExportBackup={handleExportBackup}
+            onImportBackup={handleImportBackup}
+            onSaveCurrentDraftQuick={() => handleSaveCurrentAsDraft(fileName ? `${fileName} Draft` : `Quick Draft ${new Date().toLocaleTimeString()}`)}
+            onClearAllDrafts={handleClearAllDrafts}
+            onDiscardActiveProject={resetProject}
+            onOpenCinemaStudio={() => setIsAiCinemaOpen(true)}
+            onOpenEditStudio={() => handleOpenEditor()}
+            hasActiveSubtitles={subtitles.length > 0}
+            sessionId={sessionId}
+          />
+        )}
 
-        {/* Right Column: Workspace & Logs */}
-        <div id="subtitles-workspace" className="lg:col-span-8 space-y-6 flex flex-col min-h-0">
-          
-          {/* Workspace */}
-          <ResizableBox 
-            title="Translation Workspace" 
-            icon={Languages} 
-            initialHeight={850} 
-            minHeight={500} 
-            maxHeight={2000}
-            isFullScreen={isFullScreen}
-            onFullScreenToggle={() => setIsFullScreen(!isFullScreen)}
-            actions={
-              <div className="flex flex-wrap items-center gap-2 w-full min-w-0">
-                {/* Search input with debounced typing */}
-                <div className="relative shrink-0">
-                  <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400 dark:text-zinc-500 pointer-events-none" />
-                  <input 
-                    value={searchInput} 
-                    onChange={e => setSearchInput(e.target.value)} 
-                    placeholder="Search dialogue..." 
-                    className="pl-7 pr-6 py-1.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-lg text-[11px] focus:outline-none focus:ring-1 focus:ring-emerald-500 w-28 sm:w-36 md:w-44 text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
-                  />
-                  {searchInput && (
-                    <button 
-                      onClick={() => setSearchInput('')} 
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
-                      title="Clear search"
-                    >
-                      <X size={12} />
-                    </button>
-                  )}
-                </div>
-
-                {/* Lock / Unlock Direct In-Place Editing Toggle Switch */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    const next = !isReadOnly;
-                    setIsReadOnly(next);
-                    addNotification(next ? "Workspace locked (Read-Only mode)" : "Workspace unlocked: Direct editing enabled", "success");
-                    addLog(next ? "Locked workspace to Read-Only mode." : "Unlocked direct in-place editing in translation workspace.", "info");
-                  }}
-                  className={cn(
-                    "flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-all cursor-pointer shadow-2xs shrink-0 select-none",
-                    isReadOnly
-                      ? "bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700/80 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700"
-                      : "bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-600 shadow-emerald-500/20"
-                  )}
-                  title={isReadOnly ? "Editing is locked. Click to unlock direct in-place subtitle editing" : "Editing is unlocked! Click cells to edit. Click to lock read-only mode"}
-                >
-                  {isReadOnly ? (
-                    <>
-                      <Lock size={12} className="text-zinc-500 dark:text-zinc-400" />
-                      <span>Locked (Read-Only)</span>
-                    </>
-                  ) : (
-                    <>
-                      <Unlock size={12} className="text-white animate-pulse" />
-                      <span>Editing Unlocked</span>
-                    </>
-                  )}
-                  {/* Visual Toggle Pill Indicator */}
-                  <span className={cn(
-                    "w-6 h-3.5 rounded-full flex items-center p-0.5 transition-colors ml-0.5",
-                    isReadOnly ? "bg-zinc-300 dark:bg-zinc-600 justify-start" : "bg-white/30 justify-end"
-                  )}>
-                    <span className="w-2.5 h-2.5 rounded-full bg-white shadow-2xs" />
-                  </span>
-                </button>
-
-                {/* Clustered Editing Toolbar */}
-                <div className="flex items-center gap-1 bg-zinc-100/70 dark:bg-zinc-800/60 p-0.5 rounded-xl border border-zinc-200/70 dark:border-zinc-700/60 shadow-2xs shrink-0">
+        {activeTab === 'workspace' && (
+          <div id="subtitles-workspace" className="space-y-5 flex flex-col min-h-0">
+            {/* Workspace */}
+            <ResizableBox 
+              title="Translation Workspace" 
+              icon={Languages} 
+              initialHeight={preferences.workspaceBoxHeight || 780} 
+              minHeight={420} 
+              maxHeight={2000}
+              isFullScreen={isFullScreen}
+              onFullScreenToggle={() => setIsFullScreen(!isFullScreen)}
+              actions={
+                <div className="flex items-center gap-1 flex-wrap shrink-0">
+                  <button
+                    type="button"
+                    onClick={handleUndo}
+                    disabled={historyIndex <= 0}
+                    className="min-h-[30px] px-2 rounded-md border text-[10px] font-semibold flex items-center gap-1 disabled:opacity-35 cursor-pointer"
+                    style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+                    title="Undo (Ctrl+Z)"
+                  >
+                    <Undo2 size={11} className="text-amber-500" />
+                    <span className="hidden xs:inline">Undo</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRedo}
+                    disabled={historyIndex >= history.length - 1}
+                    className="min-h-[30px] px-2 rounded-md border text-[10px] font-semibold flex items-center gap-1 disabled:opacity-35 cursor-pointer"
+                    style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+                    title="Redo (Ctrl+Y)"
+                  >
+                    <Redo2 size={11} className="text-emerald-500" />
+                    <span className="hidden xs:inline">Redo</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSplitAllLong}
+                    disabled={subtitles.length === 0 || isReadOnly}
+                    className="min-h-[30px] px-2 rounded-md border text-[10px] font-semibold flex items-center gap-1 disabled:opacity-35 cursor-pointer"
+                    style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+                    title="Divide all long subtitle blocks into short ≤2-line segments"
+                  >
+                    <Scissors size={11} style={{ color: 'var(--theme-accent)' }} />
+                    <span>Split ≤2L</span>
+                  </button>
                   <button
                     type="button"
                     onClick={() => handleOpenEditor()}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10.5px] font-bold uppercase tracking-wider bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white shadow-xs transition-all cursor-pointer shrink-0"
-                    title="Launch dedicated Subtitle Editor Studio for comprehensive editing, splits, and syncing"
+                    className="min-h-[30px] px-2 rounded-md border text-[10px] font-semibold flex items-center gap-1 cursor-pointer"
+                    style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+                    title="Open Clean Studio"
                   >
-                    <Edit3 size={13} />
-                    <span>Edit Subtitles</span>
+                    <Edit3 size={11} style={{ color: 'var(--theme-accent)' }} />
+                    <span className="hidden sm:inline">Studio</span>
                   </button>
-
                   <button
                     type="button"
-                    onClick={() => setIsFindReplaceOpen(true)}
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-200 transition-colors cursor-pointer shadow-2xs"
-                    title="Find and replace text across original or translated subtitles"
+                    onClick={() => setIsWorkspaceDrawerOpen(true)}
+                    className="min-h-[30px] px-2.5 rounded-md text-white text-[10px] font-semibold flex items-center gap-1 cursor-pointer touch-tactile"
+                    style={{ backgroundColor: 'var(--theme-accent)' }}
+                    title="Workspace Tools & Utilities Drawer"
                   >
-                    <Replace size={12} className="text-emerald-600 dark:text-emerald-400" />
-                    <span>Find / Replace</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setIsTextCleanupOpen(true)}
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-200 transition-colors cursor-pointer shadow-2xs"
-                    title="Clean dialogue, fix Urdu punctuation, strip sound cues & tags"
-                  >
-                    <Wand2 size={12} className="text-purple-500" />
-                    <span>Cleanup</span>
-                  </button>
-                </div>
-
-                {/* Clustered Timing & Synchronization Toolbar */}
-                <div className="flex items-center gap-1 bg-zinc-100/70 dark:bg-zinc-800/60 p-0.5 rounded-xl border border-zinc-200/70 dark:border-zinc-700/60 shadow-2xs shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => setIsTimeShiftOpen(true)}
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-200 transition-colors cursor-pointer shadow-2xs"
-                    title="Batch shift subtitle start and end timestamps (forward/backward sync)"
-                  >
-                    <Clock size={12} className="text-blue-500" />
-                    <span>Time Shift</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setIsGapTimingOpen(true)}
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-200 transition-colors cursor-pointer shadow-2xs"
-                    title="Remove time gaps or adjust gap range between consecutive blocks (start times protected)"
-                  >
-                    <FoldHorizontal size={12} className="text-cyan-500" />
-                    <span>Gap Timing</span>
-                  </button>
-                </div>
-
-                {/* Selection Controls */}
-                <div className="flex items-center gap-1 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-lg p-0.5 shrink-0 shadow-2xs">
-                  <button
-                    type="button"
-                    onClick={toggleSelectAll}
-                    disabled={filteredSubtitles.length === 0}
-                    className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-40 transition-colors cursor-pointer"
-                    title={selectedIndices.size === filteredSubtitles.length && filteredSubtitles.length > 0 ? "Deselect all" : "Select all visible subtitles"}
-                  >
-                    {selectedIndices.size === filteredSubtitles.length && filteredSubtitles.length > 0 ? (
-                      <CheckSquare size={12} className="text-emerald-600 dark:text-emerald-400" />
-                    ) : (
-                      <Square size={12} className="text-zinc-400" />
-                    )}
-                    <span>{selectedIndices.size === filteredSubtitles.length && filteredSubtitles.length > 0 ? "All Selected" : "Select All"}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={selectUntranslated}
-                    disabled={filteredSubtitles.length === 0}
-                    className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-40 transition-colors cursor-pointer"
-                    title="Select all segments without AI translations"
-                  >
-                    <Filter size={11} className="text-indigo-500" />
-                    <span>Untranslated ({stats.total - stats.translated})</span>
-                  </button>
-                </div>
-
-                {/* Selected Action Bar (Appears when 1+ subtitles are selected, wraps within viewport) */}
-                {selectedIndices.size > 0 && (
-                  <div className="flex flex-wrap items-center gap-1.5 bg-emerald-50/95 dark:bg-emerald-950/80 border border-emerald-300 dark:border-emerald-800/90 rounded-xl p-1.5 max-w-full shadow-xs animate-in fade-in duration-150">
-                    <span className="px-2 py-0.5 rounded-md bg-emerald-600 text-white font-mono text-[9.5px] font-bold shrink-0">
-                      {selectedIndices.size} selected
-                    </span>
-
-                    <button
-                      type="button"
-                      onClick={() => handleOpenEditor()}
-                      className="flex items-center gap-1 px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-[9.5px] font-bold uppercase tracking-wider transition-colors cursor-pointer shrink-0"
-                      title="Edit selected subtitles in dedicated Studio"
-                    >
-                      <Edit3 size={11} />
-                      <span>Edit in Studio</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={retrySelectedAI}
-                      disabled={isTranslating}
-                      className="flex items-center gap-1 px-2 py-1 rounded bg-emerald-600/90 hover:bg-emerald-700 text-white text-[9.5px] font-bold uppercase tracking-wider transition-colors cursor-pointer disabled:opacity-50 shrink-0"
-                      title="Retry AI translation for selected subtitles"
-                    >
-                      {isTranslating ? <Loader2 size={11} className="animate-spin" /> : <RotateCcw size={11} />}
-                      <span>Retry AI</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={retrySelectedGoogle}
-                      disabled={isGoogleTranslatingAll}
-                      className="flex items-center gap-1 px-2 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white text-[9.5px] font-bold uppercase tracking-wider transition-colors cursor-pointer disabled:opacity-50 shrink-0"
-                      title="Translate selected subtitles with Google Machine translation"
-                    >
-                      {isGoogleTranslatingAll ? <Loader2 size={11} className="animate-spin" /> : <Languages size={11} />}
-                      <span>Retry Google</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={retrySelectedBoth}
-                      disabled={isTranslating || isGoogleTranslatingAll}
-                      className="flex items-center gap-1 px-2 py-1 rounded bg-indigo-600 hover:bg-indigo-700 text-white text-[9.5px] font-bold uppercase tracking-wider transition-colors cursor-pointer disabled:opacity-50 shrink-0"
-                      title="Retry both AI and Google translations for selected subtitles"
-                    >
-                      {(isTranslating || isGoogleTranslatingAll) ? <Loader2 size={11} className="animate-spin" /> : <RotateCcw size={11} />}
-                      <span>Retry Both</span>
-                    </button>
-
-                    {/* Stream-Specific Clear / Delete Options (Preserves Timestamps & Block Numbers) */}
-                    <button
-                      type="button"
-                      onClick={clearSelectedTranslations}
-                      className="px-2 py-1 text-[9.5px] font-bold text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/40 border border-amber-300/60 dark:border-amber-800/60 rounded transition-colors cursor-pointer shrink-0"
-                      title="Clear AI translation stream for selected subtitles (keeps timestamps & block # intact)"
-                    >
-                      Clear AI Stream
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={clearSelectedGoogleTranslations}
-                      className="px-2 py-1 text-[9.5px] font-bold text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-950/40 border border-blue-300/60 dark:border-blue-800/60 rounded transition-colors cursor-pointer shrink-0"
-                      title="Clear Google translation stream for selected subtitles (keeps timestamps & block # intact)"
-                    >
-                      Clear Google Stream
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={clearSelectedBothTranslations}
-                      className="px-2 py-1 text-[9.5px] font-bold text-purple-700 dark:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-950/40 border border-purple-300/60 dark:border-purple-800/60 rounded transition-colors cursor-pointer shrink-0"
-                      title="Clear all translations for selected subtitles (keeps original text, timestamps & block # intact)"
-                    >
-                      Clear Both
-                    </button>
-
-                    {/* Full Segment/Block Deletion (Removes Entire Subtitle Segment - 2-step click confirmation without window.confirm) */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (isConfirmingBatchDeleteWorkspace) {
-                          deleteSelectedSubtitles();
-                          setIsConfirmingBatchDeleteWorkspace(false);
-                        } else {
-                          setIsConfirmingBatchDeleteWorkspace(true);
-                        }
-                      }}
-                      className={cn(
-                        "flex items-center gap-1 px-2.5 py-1 text-[9.5px] font-bold rounded transition-all cursor-pointer shrink-0 shadow-2xs",
-                        isConfirmingBatchDeleteWorkspace
-                          ? "bg-red-600 hover:bg-red-700 text-white border border-red-700 animate-pulse"
-                          : "text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 border border-red-200 dark:border-red-900/60"
-                      )}
-                      title={isConfirmingBatchDeleteWorkspace ? "Click again to confirm deletion" : "Delete entire subtitle block(s) including timestamps and sequence #"}
-                    >
-                      <Trash2 size={11} />
-                      <span>{isConfirmingBatchDeleteWorkspace ? `Confirm Delete (${selectedIndices.size})?` : "Delete Block / Row"}</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedIndices(new Set());
-                        setIsConfirmingBatchDeleteWorkspace(false);
-                      }}
-                      className="p-1 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 rounded cursor-pointer shrink-0"
-                      title="Clear selection"
-                    >
-                      <X size={12} />
-                    </button>
-                  </div>
-                )}
-
-                {/* COMMON CONTROLS (Visible in both Read-Only & Edit Mode) */}
-                {/* Columns Visibility Menu */}
-                <div ref={columnMenuRef} className="relative shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => { setIsColumnMenuOpen(prev => !prev); setIsTextResizeOpen(false); setIsFontsOpen(false); }}
-                    className={cn(
-                      "flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-colors border cursor-pointer shadow-2xs",
-                      isColumnMenuOpen
-                        ? "bg-emerald-50 border-emerald-300 text-emerald-700 dark:bg-emerald-950/60 dark:border-emerald-600 dark:text-emerald-300"
-                        : "bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
-                    )}
-                    title="Show or hide table columns in workspace"
-                  >
-                    <Columns size={12} className="text-zinc-500" />
-                    <span>Columns</span>
-                    <span className="text-[9px] font-mono px-1 py-0.2 rounded bg-black/5 dark:bg-white/10 font-bold">
-                      {[visibleColumns.original, visibleColumns.ai, visibleColumns.google].filter(Boolean).length}/3
-                    </span>
-                  </button>
-
-                  {isColumnMenuOpen && (
-                    <div className="absolute top-full right-0 sm:right-auto sm:left-0 mt-2 w-64 bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-700 shadow-2xl p-3.5 z-[70] space-y-2.5">
-                      <div className="flex items-center justify-between pb-1.5 border-b border-zinc-100 dark:border-zinc-800">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-700 dark:text-zinc-300">Workspace Columns</span>
-                        <button type="button" onClick={() => setIsColumnMenuOpen(false)} className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 p-0.5 cursor-pointer">
-                          <X size={13} />
-                        </button>
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="flex items-center gap-2 p-1.5 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-800 text-[11px] font-medium text-zinc-700 dark:text-zinc-300 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={visibleColumns.time}
-                            onChange={e => setVisibleColumns(prev => ({ ...prev, time: e.target.checked }))}
-                            className="accent-emerald-600 rounded cursor-pointer w-3.5 h-3.5"
-                          />
-                          <span>Time & CPS Rate</span>
-                        </label>
-                        <label className={cn(
-                          "flex items-center gap-2 p-1.5 rounded-lg text-[11px] font-semibold cursor-pointer transition-colors",
-                          visibleColumns.original ? "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200" : "hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300"
-                        )}>
-                          <input
-                            type="checkbox"
-                            checked={visibleColumns.original}
-                            onChange={e => setVisibleColumns(prev => ({ ...prev, original: e.target.checked }))}
-                            className="accent-emerald-600 rounded cursor-pointer w-3.5 h-3.5"
-                          />
-                          <span>Original Language (Source)</span>
-                        </label>
-                        <label className={cn(
-                          "flex items-center gap-2 p-1.5 rounded-lg text-[11px] font-semibold cursor-pointer transition-colors",
-                          visibleColumns.ai ? "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200" : "hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300"
-                        )}>
-                          <input
-                            type="checkbox"
-                            checked={visibleColumns.ai}
-                            onChange={e => setVisibleColumns(prev => ({ ...prev, ai: e.target.checked }))}
-                            className="accent-emerald-600 rounded cursor-pointer w-3.5 h-3.5"
-                          />
-                          <span>AI Translated Language</span>
-                        </label>
-                        <label className={cn(
-                          "flex items-center gap-2 p-1.5 rounded-lg text-[11px] font-semibold cursor-pointer transition-colors",
-                          visibleColumns.google ? "bg-blue-50 dark:bg-blue-950/40 text-blue-900 dark:text-blue-200" : "hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300"
-                        )}>
-                          <input
-                            type="checkbox"
-                            checked={visibleColumns.google}
-                            onChange={e => setVisibleColumns(prev => ({ ...prev, google: e.target.checked }))}
-                            className="accent-blue-600 rounded cursor-pointer w-3.5 h-3.5"
-                          />
-                          <span>Google Translation</span>
-                        </label>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Translation Language & Script Settings Button */}
-                <button
-                  type="button"
-                  onClick={() => setIsTranslationSettingsModalOpen(true)}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-emerald-50 hover:bg-emerald-100/80 text-emerald-800 dark:bg-emerald-950/60 dark:hover:bg-emerald-900/60 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 transition-colors cursor-pointer shrink-0 shadow-2xs"
-                  title="Configure Target Language, Script & Bilingual Mode, Tone, and Formatting"
-                >
-                  <Sliders size={13} className="text-emerald-600 dark:text-emerald-400" />
-                  <span className="hidden sm:inline">Settings:</span>
-                  <span className="font-mono text-[9px] bg-white dark:bg-zinc-800 px-1.5 py-0.5 rounded border border-emerald-200 dark:border-emerald-700 text-emerald-900 dark:text-emerald-200 font-bold">
-                    {SCRIPT_MODES.find(s => s.id === translationSettings.scriptMode)?.badge || 'اردو'}
-                  </span>
-                </button>
-
-                {/* Text Resize Button & Menu */}
-                <div ref={textResizeRef} className="relative shrink-0 text-resize-menu-container">
-                  <button 
-                    type="button"
-                    onClick={handleToggleTextResize}
-                    className={cn(
-                      "flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-colors border cursor-pointer shadow-2xs",
-                      isTextResizeOpen 
-                        ? "bg-emerald-50 border-emerald-300 text-emerald-700 dark:bg-emerald-950/60 dark:border-emerald-600 dark:text-emerald-300" 
-                        : "bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
-                    )}
-                    title="Adjust text scale for original and translated subtitle streams"
-                  >
-                    <TypeIcon size={13} className="text-emerald-600 dark:text-emerald-400" />
-                    <span className="hidden sm:inline">Text Resize</span>
-                    <span className="sm:hidden">Resize</span>
-                  </button>
-                  
-                  {isTextResizeOpen && (() => {
-                    const isTextResizeDirty = 
-                      draftOriginalFontSize !== originalFontSize ||
-                      draftTranslatedFontSize !== translatedFontSize ||
-                      draftGoogleFontSize !== googleFontSize ||
-                      draftGlobalFontSize !== globalFontSize;
-
-                    const activeEffectiveOriginalFont = isGlobalFontActive ? globalFont : originalFont;
-                    const activeEffectiveAiFont = isGlobalFontActive ? globalFont : urduFont;
-                    const activeEffectiveGoogleFont = isGlobalFontActive ? globalFont : googleFont;
-
-                    return (
-                      <div 
-                        style={textResizePopoverStyle || undefined}
-                        className={cn(
-                          "fixed bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-700 shadow-2xl p-4 z-[80] flex flex-col overflow-hidden",
-                          !textResizePopoverStyle && "top-20 left-4 right-4 sm:left-auto sm:right-auto sm:w-[520px] max-w-[calc(100vw-24px)] max-h-[82vh]"
-                        )}
-                      >
-                        {/* Header (Sticky / Shrink-0) */}
-                        <div className="flex items-center justify-between pb-2.5 border-b border-zinc-100 dark:border-zinc-800 shrink-0">
-                          <div className="flex items-center gap-2">
-                            <TypeIcon size={16} className="text-emerald-600 dark:text-emerald-400" />
-                            <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-800 dark:text-zinc-200">
-                              Text Resize & Sizing
-                            </span>
-                            {isTextResizeDirty ? (
-                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-300 dark:border-amber-800">
-                                Draft (Unapplied)
-                              </span>
-                            ) : (
-                              <span className="text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
-                                In Sync
-                              </span>
-                            )}
-                          </div>
-                          <button 
-                            type="button" 
-                            onClick={handleCancelTextResize} 
-                            className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 p-1 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
-                            title="Close (Discard Unapplied Draft)"
-                          >
-                            <X size={14} />
-                          </button>
-                        </div>
-
-                        {/* Fixed 3-Streams Preview Header (Sticky / Shrink-0) */}
-                        <div className="my-3 p-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200/80 dark:border-zinc-700/60 shrink-0 space-y-2">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-1.5">
-                              <Eye size={12} className="text-emerald-600 dark:text-emerald-400" />
-                              <span className="text-[9.5px] font-bold uppercase tracking-wider text-zinc-600 dark:text-zinc-300">
-                                Live 3-Streams Preview (Source, AI, Google)
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => setPreviewDisplayMode(m => m === 'rendered' ? 'plain' : 'rendered')}
-                                className="text-[8.5px] px-1.5 py-0.5 rounded font-mono font-bold bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors cursor-pointer shadow-2xs"
-                                title="Toggle between rendered formatting and plain stripped text"
-                              >
-                                {previewDisplayMode === 'rendered' ? 'Rendered' : 'Plain Text'}
-                              </button>
-                              <span className="text-[8.5px] font-mono text-emerald-600 dark:text-emerald-400 font-bold">
-                                Draft Scale
-                              </span>
-                            </div>
-                          </div>
-
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                            {/* 1. Source / Original Stream */}
-                            <div className="p-2 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 flex flex-col justify-between overflow-hidden min-h-[58px]">
-                              <div className="flex items-center justify-between text-[8.5px] font-bold uppercase tracking-wider text-zinc-400 mb-1">
-                                <span>1. Source</span>
-                                <span className="font-mono text-emerald-600 dark:text-emerald-400 font-bold">{draftOriginalFontSize}px</span>
-                              </div>
-                              <div 
-                                className="text-zinc-800 dark:text-zinc-200 truncate leading-tight select-text"
-                                style={{ 
-                                  fontFamily: activeEffectiveOriginalFont, 
-                                  fontSize: `${draftOriginalFontSize}px` 
-                                }}
-                                title={previewSource.plain}
-                              >
-                                {previewDisplayMode === 'rendered' && previewSource.hasHtmlFormatting ? (
-                                  <span dangerouslySetInnerHTML={{ __html: previewSource.html }} />
-                                ) : (
-                                  previewSource.plain
-                                )}
-                              </div>
-                            </div>
-
-                            {/* 2. AI Translation Stream */}
-                            <div className="p-2 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 flex flex-col justify-between overflow-hidden min-h-[58px]">
-                              <div className="flex items-center justify-between text-[8.5px] font-bold uppercase tracking-wider text-zinc-400 mb-1">
-                                <span>2. AI (Urdu)</span>
-                                <span className="font-mono text-emerald-600 dark:text-emerald-400 font-bold">{draftTranslatedFontSize}px</span>
-                              </div>
-                              <div 
-                                className="text-zinc-900 dark:text-zinc-100 font-urdu text-right truncate leading-tight select-text"
-                                style={{ 
-                                  fontFamily: activeEffectiveAiFont, 
-                                  fontSize: `${draftTranslatedFontSize}px` 
-                                }}
-                                dir="rtl"
-                                title={previewAi.plain}
-                              >
-                                {previewDisplayMode === 'rendered' && previewAi.hasHtmlFormatting ? (
-                                  <span dangerouslySetInnerHTML={{ __html: previewAi.html }} />
-                                ) : (
-                                  previewAi.plain
-                                )}
-                              </div>
-                            </div>
-
-                            {/* 3. Google Translation Stream */}
-                            <div className="p-2 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 flex flex-col justify-between overflow-hidden min-h-[58px]">
-                              <div className="flex items-center justify-between text-[8.5px] font-bold uppercase tracking-wider text-zinc-400 mb-1">
-                                <span>3. Google</span>
-                                <span className="font-mono text-blue-600 dark:text-blue-400 font-bold">{draftGoogleFontSize}px</span>
-                              </div>
-                              <div 
-                                className="text-zinc-900 dark:text-zinc-100 font-urdu text-right truncate leading-tight select-text"
-                                style={{ 
-                                  fontFamily: activeEffectiveGoogleFont, 
-                                  fontSize: `${draftGoogleFontSize}px` 
-                                }}
-                                dir="rtl"
-                                title={previewGoogle.plain}
-                              >
-                                {previewDisplayMode === 'rendered' && previewGoogle.hasHtmlFormatting ? (
-                                  <span dangerouslySetInnerHTML={{ __html: previewGoogle.html }} />
-                                ) : (
-                                  previewGoogle.plain
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Scrollable Adjustments Body */}
-                        <div className="flex-1 overflow-y-auto pr-1 space-y-3.5 min-h-0">
-                          {/* Column Visibility Checkboxes */}
-                          <div className="p-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200/80 dark:border-zinc-700/60 space-y-2">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[9.5px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
-                                Workspace Columns Rendered
-                              </span>
-                              <span className="text-[8.5px] text-emerald-600 dark:text-emerald-400 font-mono font-bold">
-                                {[visibleColumns.original && 'Original', visibleColumns.ai && 'AI', visibleColumns.google && 'Google'].filter(Boolean).length}/3 Active
-                              </span>
-                            </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
-                              <label className={cn(
-                                "flex items-center gap-2 p-1.5 rounded-lg border text-[11px] font-semibold cursor-pointer transition-colors select-none",
-                                visibleColumns.original 
-                                  ? "bg-emerald-50/80 border-emerald-300 text-emerald-900 dark:bg-emerald-950/40 dark:border-emerald-700 dark:text-emerald-200" 
-                                  : "bg-white dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-500 hover:border-zinc-300"
-                              )}>
-                                <input
-                                  type="checkbox"
-                                  checked={visibleColumns.original}
-                                  onChange={e => setVisibleColumns(prev => ({ ...prev, original: e.target.checked }))}
-                                  className="accent-emerald-600 rounded w-3.5 h-3.5 cursor-pointer"
-                                />
-                                <span className="truncate">Source</span>
-                              </label>
-
-                              <label className={cn(
-                                "flex items-center gap-2 p-1.5 rounded-lg border text-[11px] font-semibold cursor-pointer transition-colors select-none",
-                                visibleColumns.ai 
-                                  ? "bg-emerald-50/80 border-emerald-300 text-emerald-900 dark:bg-emerald-950/40 dark:border-emerald-700 dark:text-emerald-200" 
-                                  : "bg-white dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-500 hover:border-zinc-300"
-                              )}>
-                                <input
-                                  type="checkbox"
-                                  checked={visibleColumns.ai}
-                                  onChange={e => setVisibleColumns(prev => ({ ...prev, ai: e.target.checked }))}
-                                  className="accent-emerald-600 rounded w-3.5 h-3.5 cursor-pointer"
-                                />
-                                <span className="truncate">AI Translation</span>
-                              </label>
-
-                              <label className={cn(
-                                "flex items-center gap-2 p-1.5 rounded-lg border text-[11px] font-semibold cursor-pointer transition-colors select-none",
-                                visibleColumns.google 
-                                  ? "bg-blue-50/80 border-blue-300 text-blue-900 dark:bg-blue-950/40 dark:border-blue-700 dark:text-blue-200" 
-                                  : "bg-white dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-500 hover:border-zinc-300"
-                              )}>
-                                <input
-                                  type="checkbox"
-                                  checked={visibleColumns.google}
-                                  onChange={e => setVisibleColumns(prev => ({ ...prev, google: e.target.checked }))}
-                                  className="accent-blue-600 rounded w-3.5 h-3.5 cursor-pointer"
-                                />
-                                <span className="truncate">Google Translation</span>
-                              </label>
-                            </div>
-                          </div>
-
-                          {/* Stream Sizing Sliders (Updating Draft Memory) */}
-                          <div className="space-y-3">
-                            {/* Global Sync Scale Slider */}
-                            <div className="p-2.5 rounded-xl border border-indigo-200 dark:border-indigo-800/60 bg-indigo-50/40 dark:bg-indigo-950/20 space-y-1.5">
-                              <div className="flex justify-between items-center">
-                                <div className="flex items-center gap-1.5">
-                                  <Globe size={13} className="text-indigo-600 dark:text-indigo-400" />
-                                  <label className="text-[10px] font-bold text-indigo-900 dark:text-indigo-200">Global Synchronized Scale (All Streams)</label>
-                                </div>
-                                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white dark:bg-zinc-800 text-indigo-600 dark:text-indigo-400 font-bold border border-indigo-200 dark:border-indigo-700">{draftGlobalFontSize}px</span>
-                              </div>
-                              <input 
-                                type="range" min="12" max="44" step="1"
-                                value={draftGlobalFontSize} 
-                                onChange={e => {
-                                  const val = Number(e.target.value);
-                                  setDraftGlobalFontSize(val);
-                                  setDraftOriginalFontSize(Math.max(10, Math.round(val * 0.75)));
-                                  setDraftTranslatedFontSize(val);
-                                  setDraftGoogleFontSize(Math.max(10, Math.round(val * 0.75)));
-                                }}
-                                className="w-full accent-indigo-600 cursor-pointer"
-                              />
-                            </div>
-
-                            {/* Source Stream Slider */}
-                            <div>
-                              <div className="flex justify-between items-center mb-1">
-                                <label className="text-[10px] font-semibold text-zinc-700 dark:text-zinc-300 flex items-center gap-1">
-                                  <span>1. Source / Original Stream Size</span>
-                                  {visibleColumns.original && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" title="Visible in workspace" />}
-                                </label>
-                                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-emerald-700 dark:text-emerald-300 font-bold">{draftOriginalFontSize}px</span>
-                              </div>
-                              <input 
-                                type="range" min="10" max="42" step="1"
-                                value={draftOriginalFontSize} 
-                                onChange={e => setDraftOriginalFontSize(Number(e.target.value))}
-                                className="w-full accent-emerald-500 cursor-pointer"
-                              />
-                            </div>
-
-                            {/* AI Translation Stream Slider */}
-                            <div>
-                              <div className="flex justify-between items-center mb-1">
-                                <label className="text-[10px] font-semibold text-zinc-700 dark:text-zinc-300 flex items-center gap-1">
-                                  <span>2. AI Translation Stream Size</span>
-                                  {visibleColumns.ai && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" title="Visible in workspace" />}
-                                </label>
-                                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-emerald-600 dark:text-emerald-400 font-bold">{draftTranslatedFontSize}px</span>
-                              </div>
-                              <input 
-                                type="range" min="12" max="52" step="1"
-                                value={draftTranslatedFontSize} 
-                                onChange={e => setDraftTranslatedFontSize(Number(e.target.value))}
-                                className="w-full accent-emerald-500 cursor-pointer"
-                              />
-                            </div>
-
-                            {/* Google Translation Stream Slider */}
-                            <div>
-                              <div className="flex justify-between items-center mb-1">
-                                <label className="text-[10px] font-semibold text-zinc-700 dark:text-zinc-300 flex items-center gap-1">
-                                  <span>3. Google Translation Stream Size</span>
-                                  {visibleColumns.google && <span className="w-1.5 h-1.5 rounded-full bg-blue-500" title="Visible in workspace" />}
-                                </label>
-                                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-blue-600 dark:text-blue-400 font-bold">{draftGoogleFontSize}px</span>
-                              </div>
-                              <input 
-                                type="range" min="10" max="42" step="1"
-                                value={draftGoogleFontSize} 
-                                onChange={e => setDraftGoogleFontSize(Number(e.target.value))}
-                                className="w-full accent-blue-500 cursor-pointer"
-                              />
-                            </div>
-                          </div>
-
-                          {/* Quick Presets */}
-                          <div className="pt-2 border-t border-zinc-100 dark:border-zinc-800 flex items-center justify-between gap-1">
-                            <span className="text-[9px] font-bold uppercase tracking-wider text-zinc-400">Presets:</span>
-                            <div className="flex items-center gap-1 flex-wrap">
-                              <button
-                                type="button"
-                                onClick={() => { setDraftOriginalFontSize(12); setDraftTranslatedFontSize(18); setDraftGoogleFontSize(13); setDraftGlobalFontSize(18); }}
-                                className="px-2 py-0.5 text-[9.5px] font-bold rounded bg-zinc-100 dark:bg-zinc-800 hover:bg-emerald-50 hover:text-emerald-700 dark:hover:bg-emerald-950/60 dark:hover:text-emerald-300 transition-colors cursor-pointer"
-                              >
-                                Compact
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => { setDraftOriginalFontSize(14); setDraftTranslatedFontSize(22); setDraftGoogleFontSize(15); setDraftGlobalFontSize(22); }}
-                                className="px-2 py-0.5 text-[9.5px] font-bold rounded bg-zinc-100 dark:bg-zinc-800 hover:bg-emerald-50 hover:text-emerald-700 dark:hover:bg-emerald-950/60 dark:hover:text-emerald-300 transition-colors cursor-pointer"
-                              >
-                                Standard
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => { setDraftOriginalFontSize(17); setDraftTranslatedFontSize(28); setDraftGoogleFontSize(18); setDraftGlobalFontSize(28); }}
-                                className="px-2 py-0.5 text-[9.5px] font-bold rounded bg-zinc-100 dark:bg-zinc-800 hover:bg-emerald-50 hover:text-emerald-700 dark:hover:bg-emerald-950/60 dark:hover:text-emerald-300 transition-colors cursor-pointer"
-                              >
-                                Cinema
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => { setDraftOriginalFontSize(20); setDraftTranslatedFontSize(34); setDraftGoogleFontSize(21); setDraftGlobalFontSize(34); }}
-                                className="px-2 py-0.5 text-[9.5px] font-bold rounded bg-zinc-100 dark:bg-zinc-800 hover:bg-emerald-50 hover:text-emerald-700 dark:hover:bg-emerald-950/60 dark:hover:text-emerald-300 transition-colors cursor-pointer"
-                              >
-                                Large
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => { setDraftOriginalFontSize(24); setDraftTranslatedFontSize(40); setDraftGoogleFontSize(24); setDraftGlobalFontSize(40); }}
-                                className="px-2 py-0.5 text-[9.5px] font-bold rounded bg-zinc-100 dark:bg-zinc-800 hover:bg-emerald-50 hover:text-emerald-700 dark:hover:bg-emerald-950/60 dark:hover:text-emerald-300 transition-colors cursor-pointer"
-                              >
-                                Ultra
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Sticky Action Footer: Reset Draft, Cancel, Apply */}
-                        <div className="pt-3 mt-2 border-t border-zinc-100 dark:border-zinc-800 flex items-center justify-between gap-2 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setDraftOriginalFontSize(originalFontSize);
-                              setDraftTranslatedFontSize(translatedFontSize);
-                              setDraftGoogleFontSize(googleFontSize);
-                              setDraftGlobalFontSize(globalFontSize);
-                            }}
-                            disabled={!isTextResizeDirty}
-                            className="px-2.5 py-1.5 text-[10px] font-bold text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors"
-                          >
-                            Reset Draft
-                          </button>
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={handleCancelTextResize}
-                              className="px-3 py-1.5 rounded-lg text-xs font-bold bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 cursor-pointer transition-colors"
-                            >
-                              Cancel
-                            </button>
-                            <button
-                              type="button"
-                              onClick={handleApplyTextResize}
-                              className={cn(
-                                "px-3.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all shadow-xs",
-                                isTextResizeDirty
-                                  ? "bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-500/20"
-                                  : "bg-zinc-200 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500 hover:bg-zinc-300 dark:hover:bg-zinc-700"
-                              )}
-                            >
-                              <Check size={13} />
-                              <span>Apply to Workspace</span>
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })()}
-                </div>
-
-                {/* Fonts Button & Menu */}
-                <div ref={fontsRef} className="relative shrink-0 fonts-menu-container">
-                  <button 
-                    type="button"
-                    onClick={handleToggleFonts}
-                    className={cn(
-                      "flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-colors border cursor-pointer shadow-2xs",
-                      isFontsOpen 
-                        ? "bg-emerald-50 border-emerald-300 text-emerald-700 dark:bg-emerald-950/60 dark:border-emerald-600 dark:text-emerald-300" 
-                        : "bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
-                    )}
-                    title="Select font family for original and translated subtitle streams"
-                  >
-                    <Languages size={13} className="text-emerald-600 dark:text-emerald-400" />
-                    <span>Fonts</span>
-                  </button>
-                  
-                  {isFontsOpen && (() => {
-                    const isFontsDirty = 
-                      draftOriginalFont !== originalFont ||
-                      draftUrduFont !== urduFont ||
-                      draftGoogleFont !== googleFont ||
-                      draftGlobalFont !== globalFont ||
-                      draftIsGlobalFontActive !== isGlobalFontActive ||
-                      draftFontTarget !== fontTarget;
-
-                    const effectiveDraftOriginalFont = draftIsGlobalFontActive ? draftGlobalFont : draftOriginalFont;
-                    const effectiveDraftAiFont = draftIsGlobalFontActive ? draftGlobalFont : draftUrduFont;
-                    const effectiveDraftGoogleFont = draftIsGlobalFontActive ? draftGlobalFont : draftGoogleFont;
-
-                    const getFontLabel = (val: string) => {
-                      const urdu = URDU_FONT_OPTIONS.find(f => f.value === val);
-                      if (urdu) return urdu.name;
-                      const eng = ENGLISH_FONT_OPTIONS.find(f => f.value === val);
-                      if (eng) return eng.name;
-                      const loc = localFonts.find(f => f.value === val);
-                      if (loc) return loc.name;
-                      return val.split(',')[0].replace(/['"]/g, '').trim() || 'Custom';
-                    };
-
-                    const isFontActive = (val: string) => {
-                      if (draftFontTarget === 'global') {
-                        return draftIsGlobalFontActive && draftGlobalFont === val;
-                      }
-                      if (draftFontTarget === 'original') return draftOriginalFont === val;
-                      if (draftFontTarget === 'ai') return draftUrduFont === val;
-                      if (draftFontTarget === 'google') return draftGoogleFont === val;
-                      return false;
-                    };
-
-                    return (
-                      <div 
-                        style={fontsPopoverStyle || undefined}
-                        className={cn(
-                          "fixed bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-700 shadow-2xl p-4 z-[80] flex flex-col overflow-hidden",
-                          !fontsPopoverStyle && "top-20 left-4 right-4 sm:left-auto sm:right-auto sm:w-[620px] max-w-[calc(100vw-24px)] max-h-[85vh]"
-                        )}
-                      >
-                        {/* Header (Sticky / Shrink-0) */}
-                        <div className="flex items-center justify-between pb-2.5 border-b border-zinc-100 dark:border-zinc-800 shrink-0">
-                          <div className="flex items-center gap-2">
-                            <Languages size={16} className="text-emerald-600 dark:text-emerald-400" />
-                            <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-800 dark:text-zinc-200">
-                              Workspace Typography & Fonts
-                            </span>
-                            {isFontsDirty ? (
-                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-300 dark:border-amber-800">
-                                Draft (Unapplied)
-                              </span>
-                            ) : (
-                              <span className="text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
-                                In Sync
-                              </span>
-                            )}
-                          </div>
-                          <button 
-                            type="button" 
-                            onClick={handleCancelFonts} 
-                            className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 p-1 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
-                            title="Close (Discard Unapplied Draft)"
-                          >
-                            <X size={14} />
-                          </button>
-                        </div>
-
-                        {/* Fixed 3-Streams Preview Header (Sticky / Shrink-0) */}
-                        <div className="my-3 p-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200/80 dark:border-zinc-700/60 shrink-0 space-y-2">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-1.5">
-                              <Eye size={12} className="text-emerald-600 dark:text-emerald-400" />
-                              <span className="text-[9.5px] font-bold uppercase tracking-wider text-zinc-600 dark:text-zinc-300">
-                                Live 3-Streams Preview (Source, AI, Google)
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => setPreviewDisplayMode(m => m === 'rendered' ? 'plain' : 'rendered')}
-                                className="text-[8.5px] px-1.5 py-0.5 rounded font-mono font-bold bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors cursor-pointer shadow-2xs"
-                                title="Toggle between rendered formatting and plain stripped text"
-                              >
-                                {previewDisplayMode === 'rendered' ? 'Rendered' : 'Plain Text'}
-                              </button>
-                              <span className="text-[8.5px] font-mono text-emerald-600 dark:text-emerald-400 font-bold">
-                                Draft Fonts
-                              </span>
-                            </div>
-                          </div>
-
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                            {/* 1. Source / Original Stream */}
-                            <div className="p-2 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 flex flex-col justify-between overflow-hidden min-h-[62px]">
-                              <div className="flex items-center justify-between text-[8.5px] font-bold uppercase tracking-wider text-zinc-400 mb-1">
-                                <span>1. Source</span>
-                                <span className="font-mono text-emerald-600 dark:text-emerald-400 font-bold truncate max-w-[90px]" title={getFontLabel(effectiveDraftOriginalFont)}>
-                                  {getFontLabel(effectiveDraftOriginalFont)}
-                                </span>
-                              </div>
-                              <div 
-                                className="text-zinc-800 dark:text-zinc-200 truncate leading-tight select-text"
-                                style={{ 
-                                  fontFamily: effectiveDraftOriginalFont, 
-                                  fontSize: `${originalFontSize}px` 
-                                }}
-                                title={previewSource.plain}
-                              >
-                                {previewDisplayMode === 'rendered' && previewSource.hasHtmlFormatting ? (
-                                  <span dangerouslySetInnerHTML={{ __html: previewSource.html }} />
-                                ) : (
-                                  previewSource.plain
-                                )}
-                              </div>
-                            </div>
-
-                            {/* 2. AI Translation Stream */}
-                            <div className="p-2 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 flex flex-col justify-between overflow-hidden min-h-[62px]">
-                              <div className="flex items-center justify-between text-[8.5px] font-bold uppercase tracking-wider text-zinc-400 mb-1">
-                                <span>2. AI (Urdu)</span>
-                                <span className="font-mono text-emerald-600 dark:text-emerald-400 font-bold truncate max-w-[90px]" title={getFontLabel(effectiveDraftAiFont)}>
-                                  {getFontLabel(effectiveDraftAiFont)}
-                                </span>
-                              </div>
-                              <div 
-                                className="text-zinc-900 dark:text-zinc-100 font-urdu text-right truncate leading-tight select-text"
-                                style={{ 
-                                  fontFamily: effectiveDraftAiFont, 
-                                  fontSize: `${translatedFontSize}px` 
-                                }}
-                                dir="rtl"
-                                title={previewAi.plain}
-                              >
-                                {previewDisplayMode === 'rendered' && previewAi.hasHtmlFormatting ? (
-                                  <span dangerouslySetInnerHTML={{ __html: previewAi.html }} />
-                                ) : (
-                                  previewAi.plain
-                                )}
-                              </div>
-                            </div>
-
-                            {/* 3. Google Translation Stream */}
-                            <div className="p-2 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 flex flex-col justify-between overflow-hidden min-h-[62px]">
-                              <div className="flex items-center justify-between text-[8.5px] font-bold uppercase tracking-wider text-zinc-400 mb-1">
-                                <span>3. Google</span>
-                                <span className="font-mono text-blue-600 dark:text-blue-400 font-bold truncate max-w-[90px]" title={getFontLabel(effectiveDraftGoogleFont)}>
-                                  {getFontLabel(effectiveDraftGoogleFont)}
-                                </span>
-                              </div>
-                              <div 
-                                className="text-zinc-900 dark:text-zinc-100 font-urdu text-right truncate leading-tight select-text"
-                                style={{ 
-                                  fontFamily: effectiveDraftGoogleFont, 
-                                  fontSize: `${googleFontSize}px` 
-                                }}
-                                dir="rtl"
-                                title={previewGoogle.plain}
-                              >
-                                {previewDisplayMode === 'rendered' && previewGoogle.hasHtmlFormatting ? (
-                                  <span dangerouslySetInnerHTML={{ __html: previewGoogle.html }} />
-                                ) : (
-                                  previewGoogle.plain
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Scrollable Adjustments Body */}
-                        <div className="flex-1 overflow-y-auto pr-1 space-y-3.5 min-h-0">
-                          {/* Column Visibility Checkboxes */}
-                          <div className="p-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200/80 dark:border-zinc-700/60 space-y-2">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[9.5px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
-                                Workspace Columns Rendered
-                              </span>
-                              <span className="text-[8.5px] text-emerald-600 dark:text-emerald-400 font-mono font-bold">
-                                {[visibleColumns.original && 'Original', visibleColumns.ai && 'AI', visibleColumns.google && 'Google'].filter(Boolean).length}/3 Active
-                              </span>
-                            </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
-                              <label className={cn(
-                                "flex items-center gap-2 p-1.5 rounded-lg border text-[11px] font-semibold cursor-pointer transition-colors select-none",
-                                visibleColumns.original 
-                                  ? "bg-emerald-50/80 border-emerald-300 text-emerald-900 dark:bg-emerald-950/40 dark:border-emerald-700 dark:text-emerald-200" 
-                                  : "bg-white dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-500 hover:border-zinc-300"
-                              )}>
-                                <input
-                                  type="checkbox"
-                                  checked={visibleColumns.original}
-                                  onChange={e => setVisibleColumns(prev => ({ ...prev, original: e.target.checked }))}
-                                  className="accent-emerald-600 rounded w-3.5 h-3.5 cursor-pointer"
-                                />
-                                <span className="truncate">Source</span>
-                              </label>
-
-                              <label className={cn(
-                                "flex items-center gap-2 p-1.5 rounded-lg border text-[11px] font-semibold cursor-pointer transition-colors select-none",
-                                visibleColumns.ai 
-                                  ? "bg-emerald-50/80 border-emerald-300 text-emerald-900 dark:bg-emerald-950/40 dark:border-emerald-700 dark:text-emerald-200" 
-                                  : "bg-white dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-500 hover:border-zinc-300"
-                              )}>
-                                <input
-                                  type="checkbox"
-                                  checked={visibleColumns.ai}
-                                  onChange={e => setVisibleColumns(prev => ({ ...prev, ai: e.target.checked }))}
-                                  className="accent-emerald-600 rounded w-3.5 h-3.5 cursor-pointer"
-                                />
-                                <span className="truncate">AI Translation</span>
-                              </label>
-
-                              <label className={cn(
-                                "flex items-center gap-2 p-1.5 rounded-lg border text-[11px] font-semibold cursor-pointer transition-colors select-none",
-                                visibleColumns.google 
-                                  ? "bg-blue-50/80 border-blue-300 text-blue-900 dark:bg-blue-950/40 dark:border-blue-700 dark:text-blue-200" 
-                                  : "bg-white dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-500 hover:border-zinc-300"
-                              )}>
-                                <input
-                                  type="checkbox"
-                                  checked={visibleColumns.google}
-                                  onChange={e => setVisibleColumns(prev => ({ ...prev, google: e.target.checked }))}
-                                  className="accent-blue-600 rounded w-3.5 h-3.5 cursor-pointer"
-                                />
-                                <span className="truncate">Google Translation</span>
-                              </label>
-                            </div>
-                          </div>
-
-                          {/* Target Subtitle Stream Selector */}
-                          <div className="space-y-1.5">
-                            <label className="text-[9.5px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 block">
-                              Apply Selected Font To:
-                            </label>
-                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1 p-1 bg-zinc-100 dark:bg-zinc-800 rounded-xl">
-                              <button
-                                type="button"
-                                onClick={() => setDraftFontTarget('global')}
-                                className={cn(
-                                  "px-2 py-1.5 rounded-lg text-[10px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer",
-                                  draftFontTarget === 'global'
-                                    ? "bg-indigo-600 text-white shadow-xs"
-                                    : "text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white"
-                                )}
-                              >
-                                <Globe size={11} />
-                                <span>Global (All)</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setDraftFontTarget('original')}
-                                className={cn(
-                                  "px-2 py-1.5 rounded-lg text-[10px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer",
-                                  draftFontTarget === 'original'
-                                    ? "bg-emerald-600 text-white shadow-xs"
-                                    : "text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white"
-                                )}
-                              >
-                                <span>Source</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setDraftFontTarget('ai')}
-                                className={cn(
-                                  "px-2 py-1.5 rounded-lg text-[10px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer",
-                                  draftFontTarget === 'ai'
-                                    ? "bg-emerald-600 text-white shadow-xs"
-                                    : "text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white"
-                                )}
-                              >
-                                <span>AI Urdu</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setDraftFontTarget('google')}
-                                className={cn(
-                                  "px-2 py-1.5 rounded-lg text-[10px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer",
-                                  draftFontTarget === 'google'
-                                    ? "bg-blue-600 text-white shadow-xs"
-                                    : "text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white"
-                                )}
-                              >
-                                <span>Google</span>
-                              </button>
-                            </div>
-                            {draftFontTarget === 'global' && draftIsGlobalFontActive && (
-                              <div className="flex items-center justify-between p-1.5 px-2 bg-indigo-50 dark:bg-indigo-950/40 rounded-lg border border-indigo-200 dark:border-indigo-800 text-[10px] text-indigo-700 dark:text-indigo-300 font-medium">
-                                <span>🌐 Global font active across all streams</span>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setDraftIsGlobalFontActive(false);
-                                  }}
-                                  className="text-[9px] underline font-bold hover:text-indigo-900 dark:hover:text-indigo-100 cursor-pointer"
-                                >
-                                  Use Individual Fonts
-                                </button>
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Typography Tabs: English, Urdu, My Local Fonts */}
-                          <div>
-                            <div className="flex border-b border-zinc-200 dark:border-zinc-700 mb-2.5">
-                              <button
-                                type="button"
-                                onClick={() => setFontsActiveTab('urdu')}
-                                className={cn(
-                                  "flex-1 pb-2 text-[11px] font-bold transition-colors border-b-2 text-center cursor-pointer",
-                                  fontsActiveTab === 'urdu'
-                                    ? "border-emerald-600 text-emerald-600 dark:border-emerald-400 dark:text-emerald-400"
-                                    : "border-transparent text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
-                                )}
-                              >
-                                اردو Urdu Fonts ({URDU_FONT_OPTIONS.length})
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setFontsActiveTab('english')}
-                                className={cn(
-                                  "flex-1 pb-2 text-[11px] font-bold transition-colors border-b-2 text-center cursor-pointer",
-                                  fontsActiveTab === 'english'
-                                    ? "border-emerald-600 text-emerald-600 dark:border-emerald-400 dark:text-emerald-400"
-                                    : "border-transparent text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
-                                )}
-                              >
-                                English Fonts ({ENGLISH_FONT_OPTIONS.length})
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setFontsActiveTab('local')}
-                                className={cn(
-                                  "flex-1 pb-2 text-[11px] font-bold transition-colors border-b-2 text-center cursor-pointer",
-                                  fontsActiveTab === 'local'
-                                    ? "border-emerald-600 text-emerald-600 dark:border-emerald-400 dark:text-emerald-400"
-                                    : "border-transparent text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
-                                )}
-                              >
-                                My Local Fonts ({localFonts.length})
-                              </button>
-                            </div>
-
-                            {/* Tab 1: Urdu Fonts */}
-                            {fontsActiveTab === 'urdu' && (
-                              <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
-                                {URDU_FONT_OPTIONS.map((f) => {
-                                  const isActive = isFontActive(f.value);
-                                  return (
-                                    <button
-                                      key={f.name}
-                                      type="button"
-                                      onClick={() => applyFontSelectionDraft(f.name, f.value)}
-                                      className={cn(
-                                        "w-full text-left p-2.5 rounded-xl border transition-all flex flex-col gap-1 cursor-pointer",
-                                        isActive
-                                          ? "bg-emerald-50/90 border-emerald-400 text-emerald-900 dark:bg-emerald-950/50 dark:border-emerald-600 dark:text-emerald-200 shadow-2xs"
-                                          : "bg-white dark:bg-zinc-800/80 border-zinc-200 dark:border-zinc-700/60 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-800 dark:text-zinc-200"
-                                      )}
-                                    >
-                                      <div className="flex items-center justify-between">
-                                        <span className="text-[11px] font-bold">{f.name}</span>
-                                        {isActive && <Check size={14} className="text-emerald-600 dark:text-emerald-400 shrink-0" />}
-                                      </div>
-                                      <div 
-                                        className="text-right text-base text-zinc-900 dark:text-zinc-100 font-urdu py-0.5"
-                                        style={{ fontFamily: f.value }}
-                                        dir="rtl"
-                                      >
-                                        {f.previewText || 'ہر بات میں ایک گہرا احساس چھپا ہے'}
-                                      </div>
-                                      {f.description && (
-                                        <span className="text-[9px] text-zinc-400 dark:text-zinc-500">{f.description}</span>
-                                      )}
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            )}
-
-                            {/* Tab 2: English Fonts */}
-                            {fontsActiveTab === 'english' && (
-                              <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
-                                {ENGLISH_FONT_OPTIONS.map((f) => {
-                                  const isActive = isFontActive(f.value);
-                                  return (
-                                    <button
-                                      key={f.name}
-                                      type="button"
-                                      onClick={() => applyFontSelectionDraft(f.name, f.value)}
-                                      className={cn(
-                                        "w-full text-left p-2.5 rounded-xl border transition-all flex flex-col gap-1 cursor-pointer",
-                                        isActive
-                                          ? "bg-emerald-50/90 border-emerald-400 text-emerald-900 dark:bg-emerald-950/50 dark:border-emerald-600 dark:text-emerald-200 shadow-2xs"
-                                          : "bg-white dark:bg-zinc-800/80 border-zinc-200 dark:border-zinc-700/60 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-800 dark:text-zinc-200"
-                                      )}
-                                    >
-                                      <div className="flex items-center justify-between">
-                                        <span className="text-[11px] font-bold">{f.name}</span>
-                                        {isActive && <Check size={14} className="text-emerald-600 dark:text-emerald-400 shrink-0" />}
-                                      </div>
-                                      <div 
-                                        className="text-left text-sm text-zinc-900 dark:text-zinc-100 py-0.5"
-                                        style={{ fontFamily: f.value }}
-                                      >
-                                        {f.previewText || 'Cinematic Dialogue & Narrative Flow'}
-                                      </div>
-                                      {f.description && (
-                                        <span className="text-[9px] text-zinc-400 dark:text-zinc-500">{f.description}</span>
-                                      )}
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            )}
-
-                            {/* Tab 3: My Local Fonts */}
-                            {fontsActiveTab === 'local' && (
-                              <div className="space-y-3 max-h-64 overflow-y-auto pr-1">
-                                {/* Add Custom / Upload Font Controls */}
-                                <div className="p-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700 space-y-2">
-                                  <span className="text-[9.5px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 block">
-                                    Add Custom Font for Source & Subtitles
-                                  </span>
-                                  
-                                  <div className="flex items-center gap-1.5">
-                                    <input
-                                      type="text"
-                                      placeholder="System Font Name (e.g. Arial, SF Pro, Nafees)"
-                                      value={customFontInputName}
-                                      onChange={e => setCustomFontInputName(e.target.value)}
-                                      onKeyDown={e => { if (e.key === 'Enter') handleAddNamedFont(); }}
-                                      className="flex-1 px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-900 text-xs text-zinc-800 dark:text-zinc-200 focus:outline-hidden focus:ring-1 focus:ring-emerald-500"
-                                    />
-                                    <button
-                                      type="button"
-                                      onClick={handleAddNamedFont}
-                                      className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shrink-0 cursor-pointer transition-colors shadow-2xs"
-                                    >
-                                      + Add
-                                    </button>
-                                  </div>
-
-                                  {/* Upload Font File Button */}
-                                  <label className="flex items-center justify-center gap-1.5 w-full py-1.5 px-3 rounded-lg border border-dashed border-emerald-400 dark:border-emerald-600 bg-emerald-50/50 hover:bg-emerald-100/60 dark:bg-emerald-950/20 dark:hover:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 font-bold text-xs cursor-pointer transition-colors">
-                                    <Upload size={12} className={isUploadingFont ? "animate-bounce" : ""} />
-                                    <span>{isUploadingFont ? "Loading Font..." : "Upload Font File (.ttf, .otf, .woff, .woff2)"}</span>
-                                    <input
-                                      type="file"
-                                      accept=".ttf,.otf,.woff,.woff2,font/*"
-                                      onChange={handleUploadFontFile}
-                                      className="hidden"
-                                      disabled={isUploadingFont}
-                                    />
-                                  </label>
-                                </div>
-
-                                {/* Saved Local Fonts List */}
-                                <div className="space-y-1.5">
-                                  <span className="text-[9px] font-bold uppercase tracking-wider text-zinc-400 block">
-                                    Saved Local Fonts ({localFonts.length})
-                                  </span>
-                                  {localFonts.length === 0 ? (
-                                    <div className="text-center py-4 text-zinc-400 text-xs italic">
-                                      No local fonts added yet. Type a system font name or upload a .ttf/.otf file above.
-                                    </div>
-                                  ) : (
-                                    localFonts.map((f) => {
-                                      const isActive = isFontActive(f.value);
-                                      return (
-                                        <div
-                                          key={f.id}
-                                          onClick={() => applyFontSelectionDraft(f.name, f.value)}
-                                          className={cn(
-                                            "w-full text-left p-2.5 rounded-xl border transition-all flex items-center justify-between gap-2 cursor-pointer group",
-                                            isActive
-                                              ? "bg-emerald-50/90 border-emerald-400 text-emerald-900 dark:bg-emerald-950/50 dark:border-emerald-600 dark:text-emerald-200 shadow-2xs"
-                                              : "bg-white dark:bg-zinc-800/80 border-zinc-200 dark:border-zinc-700/60 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-800 dark:text-zinc-200"
-                                          )}
-                                        >
-                                          <div className="flex-1 min-w-0">
-                                            <div className="flex items-center gap-1.5">
-                                              <span className="text-[11px] font-bold truncate">{f.name}</span>
-                                              {f.isUploaded && (
-                                                <span className="text-[8px] font-mono px-1 py-0.2 rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
-                                                  Uploaded
-                                                </span>
-                                              )}
-                                            </div>
-                                            <div 
-                                              className="text-xs text-zinc-700 dark:text-zinc-300 truncate mt-0.5"
-                                              style={{ fontFamily: f.value }}
-                                            >
-                                              The quick brown fox jumps over the lazy dog • ہر بات میں احساس
-                                            </div>
-                                          </div>
-
-                                          <div className="flex items-center gap-1 shrink-0">
-                                            {isActive && <Check size={14} className="text-emerald-600 dark:text-emerald-400" />}
-                                            <button
-                                              type="button"
-                                              onClick={(e) => handleDeleteLocalFont(f.id, e)}
-                                              className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-red-50 text-red-500 hover:text-red-700 transition-opacity"
-                                              title="Remove custom font"
-                                            >
-                                              <Trash2 size={12} />
-                                            </button>
-                                          </div>
-                                        </div>
-                                      );
-                                    })
-                                  )}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Sticky Action Footer: Reset Draft, Cancel, Apply */}
-                        <div className="pt-3 mt-2 border-t border-zinc-100 dark:border-zinc-800 flex items-center justify-between gap-2 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setDraftOriginalFont(originalFont);
-                              setDraftUrduFont(urduFont);
-                              setDraftGoogleFont(googleFont);
-                              setDraftGlobalFont(globalFont);
-                              setDraftIsGlobalFontActive(isGlobalFontActive);
-                              setDraftFontTarget(fontTarget);
-                            }}
-                            disabled={!isFontsDirty}
-                            className="px-2.5 py-1.5 text-[10px] font-bold text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors"
-                          >
-                            Reset Draft
-                          </button>
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={handleCancelFonts}
-                              className="px-3 py-1.5 rounded-lg text-xs font-bold bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 cursor-pointer transition-colors"
-                            >
-                              Cancel
-                            </button>
-                            <button
-                              type="button"
-                              onClick={handleApplyFonts}
-                              className={cn(
-                                "px-3.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all shadow-xs",
-                                isFontsDirty
-                                  ? "bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-500/20"
-                                  : "bg-zinc-200 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500 hover:bg-zinc-300 dark:hover:bg-zinc-700"
-                              )}
-                            >
-                              <Check size={13} />
-                              <span>Apply to Workspace</span>
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })()}
-                </div>
-
-                {/* Reset, Undo, Redo & Workspace Tools Dropdown Menu */}
-                <div ref={workspaceToolsRef} className="relative shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsWorkspaceToolsOpen(prev => !prev);
-                      setIsTextResizeOpen(false);
-                      setIsFontsOpen(false);
-                      setIsColumnMenuOpen(false);
-                    }}
-                    className={cn(
-                      "flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all border cursor-pointer shadow-2xs shrink-0",
-                      isWorkspaceToolsOpen
-                        ? "bg-emerald-50 border-emerald-300 text-emerald-700 dark:bg-emerald-950/60 dark:border-emerald-600 dark:text-emerald-300"
-                        : "bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
-                    )}
-                    title="Undo, Redo, Reset Baseline & Workspace Tools"
-                  >
-                    <History size={12} className="text-emerald-600 dark:text-emerald-400" />
+                    <Sliders size={11} />
                     <span>Tools</span>
-                    <ChevronDown size={11} className={cn("transition-transform", isWorkspaceToolsOpen && "rotate-180")} />
+                    {(selectedIndices.size > 0 || searchTerm || qcFilter !== 'all') && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-white/90" />
+                    )}
                   </button>
+                </div>
+              }
+          >
+            <div className="flex flex-col h-full min-h-0">
+              {!visibleColumns.original && !visibleColumns.ai && !visibleColumns.google && (
+                <div className="px-3 py-2 border-b text-amber-500 text-xs flex items-center justify-between" style={{ borderColor: 'var(--theme-border)' }}>
+                  <span>All text columns hidden.</span>
+                  <button
+                    type="button"
+                    onClick={() => setVisibleColumns((prev) => ({ ...prev, original: true, ai: true, google: true }))}
+                    className="px-2 py-0.5 rounded border border-amber-500/40 text-[10px] font-semibold cursor-pointer"
+                  >
+                    Show Columns
+                  </button>
+                </div>
+              )}
 
-                  {isWorkspaceToolsOpen && (
-                    <div className="absolute top-full right-0 mt-2 w-64 bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-700 shadow-2xl p-2.5 z-[90] space-y-1.5 animate-in fade-in duration-150">
-                      <div className="px-2 py-1 flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800">
-                        <span className="text-[10px] font-extrabold uppercase tracking-wider text-zinc-400">
-                          Workspace Tools & History
-                        </span>
-                        <span className="text-[9px] font-mono text-zinc-400">
-                          Step {Math.max(0, historyIndex)} of {Math.max(0, history.length - 1)}
-                        </span>
-                      </div>
+              {/* Mobile Card Quick Bar (always shows Split ≤2L + multilingual stream switches) */}
+              {useMobileCards && (
+                <div
+                  className="px-2.5 py-1.5 border-b flex flex-wrap items-center justify-between gap-1.5"
+                  style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+                >
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setIsWorkspaceDrawerOpen(true)}
+                      className="px-2 py-1 rounded-md text-[10px] font-semibold flex items-center gap-1 text-white cursor-pointer"
+                      style={{ backgroundColor: 'var(--theme-accent)' }}
+                    >
+                      <Sliders size={10} />
+                      <span>Tools</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSplitAllLong}
+                      disabled={subtitles.length === 0 || isReadOnly}
+                      className="px-2 py-1 rounded-md border text-[10px] font-semibold flex items-center gap-1 disabled:opacity-35 cursor-pointer"
+                      style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+                      title="Divide all long subtitle blocks into ≤2 lines"
+                    >
+                      <Scissors size={10} style={{ color: 'var(--theme-accent)' }} />
+                      <span>Split ≤2L</span>
+                    </button>
+                  </div>
 
-                      {/* Undo / Redo Row */}
-                      <div className="grid grid-cols-2 gap-1.5 pt-1">
+                  {preferences.mobileSubtitleView === 'stream-switch' ? (
+                    <div className="flex items-center gap-1 p-0.5 rounded-lg border" style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}>
+                      {(
+                        [
+                          { id: 'ai', label: 'AI' },
+                          { id: 'google', label: 'Neutral' },
+                          { id: 'original', label: 'Orig' },
+                        ] as const
+                      ).map((st) => (
                         <button
+                          key={st.id}
                           type="button"
-                          onClick={() => {
-                            handleUndo();
-                            setIsWorkspaceToolsOpen(false);
-                          }}
-                          disabled={historyIndex <= 0}
-                          className="flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-700 disabled:opacity-40 text-[10.5px] font-bold transition-colors cursor-pointer"
-                          title="Undo last change (Ctrl+Z)"
+                          onClick={() => setMobileFocusStream(st.id)}
+                          className={cn(
+                            'px-2 py-0.5 rounded text-[10px] font-semibold cursor-pointer',
+                            mobileFocusStream === st.id ? 'text-white' : 'opacity-65'
+                          )}
+                          style={mobileFocusStream === st.id ? { backgroundColor: 'var(--theme-accent)' } : undefined}
                         >
-                          <Undo2 size={12} className="text-amber-600 dark:text-amber-400" />
-                          <span>Undo</span>
+                          {st.label}
                         </button>
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            handleRedo();
-                            setIsWorkspaceToolsOpen(false);
-                          }}
-                          disabled={historyIndex >= history.length - 1}
-                          className="flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-700 disabled:opacity-40 text-[10.5px] font-bold transition-colors cursor-pointer"
-                          title="Redo change (Ctrl+Y)"
-                        >
-                          <Redo2 size={12} className="text-emerald-600 dark:text-emerald-400" />
-                          <span>Redo</span>
-                        </button>
-                      </div>
-
-                      <div className="h-px bg-zinc-100 dark:bg-zinc-800 my-1" />
-
-                      {/* Watermark in Row 1 Action */}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsWatermarkModalOpen(true);
-                          setIsWorkspaceToolsOpen(false);
-                        }}
-                        className="w-full flex items-center gap-2 p-2 rounded-xl text-[11px] font-semibold text-zinc-700 dark:text-zinc-200 hover:bg-amber-50 dark:hover:bg-amber-950/40 hover:text-amber-800 dark:hover:text-amber-300 transition-colors cursor-pointer text-left"
-                      >
-                        <Stamp size={13} className="text-amber-500 shrink-0" />
-                        <div>
-                          <div className="font-bold">Add / Edit Watermark in Row 1</div>
-                          <div className="text-[9.5px] text-zinc-400 dark:text-zinc-500 font-normal">Translator credits & channel branding</div>
-                        </div>
-                      </button>
-
-                      {/* Reset Timings to Baseline */}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          handleResetTimingsToOriginal();
-                          setIsWorkspaceToolsOpen(false);
-                        }}
-                        className="w-full flex items-center gap-2 p-2 rounded-xl text-[11px] font-semibold text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer text-left"
-                      >
-                        <Clock size={13} className="text-blue-500 shrink-0" />
-                        <div>
-                          <div className="font-bold">Reset Timings to Original</div>
-                          <div className="text-[9.5px] text-zinc-400 dark:text-zinc-500 font-normal">Revert timestamps to initial file values</div>
-                        </div>
-                      </button>
-
-                      {/* Reset All to Initial Baseline */}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (history.length > 0) {
-                            setSubtitles(history[0]);
-                            setHistory([history[0]]);
-                            setHistoryIndex(0);
-                            addNotification("Reset all subtitles back to original initial baseline!", "success");
-                            addLog("Reset all subtitle dialogue, translations, and timings to initial state.", "warning");
-                          }
-                          setIsWorkspaceToolsOpen(false);
-                        }}
-                        className="w-full flex items-center gap-2 p-2 rounded-xl text-[11px] font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer text-left"
-                      >
-                        <RotateCcw size={13} className="shrink-0" />
-                        <div>
-                          <div className="font-bold">Reset All to Initial Baseline</div>
-                          <div className="text-[9.5px] text-zinc-400 dark:text-zinc-500 font-normal">Discard all session edits & translations</div>
-                        </div>
-                      </button>
-
-                      <div className="h-px bg-zinc-100 dark:bg-zinc-800 my-1" />
-
-                      {/* Force Refresh Table View */}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSubtitles([...subtitles]);
-                          addNotification("Table view refreshed.", "success");
-                          setIsWorkspaceToolsOpen(false);
-                        }}
-                        className="w-full flex items-center gap-2 p-2 rounded-xl text-[11px] font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer text-left"
-                      >
-                        <RefreshCw size={12} className="shrink-0" />
-                        <span>Force Refresh Table View</span>
-                      </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1 p-0.5 rounded-lg border" style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}>
+                      {(
+                        [
+                          { key: 'original', label: 'Orig' },
+                          { key: 'ai', label: 'AI' },
+                          { key: 'google', label: 'Neutral' },
+                        ] as const
+                      ).map((col) => {
+                        const active = visibleColumns[col.key];
+                        return (
+                          <button
+                            key={col.key}
+                            type="button"
+                            onClick={() =>
+                              setVisibleColumns((prev) => ({ ...prev, [col.key]: !prev[col.key] }))
+                            }
+                            className={cn(
+                              'px-2 py-0.5 rounded text-[10px] font-semibold cursor-pointer',
+                              active ? 'text-white' : 'opacity-55'
+                            )}
+                            style={active ? { backgroundColor: 'var(--theme-accent)' } : undefined}
+                            title={`Switch ${col.label} stream`}
+                          >
+                            {col.label}
+                          </button>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
-                
-                {/* Progress bars */}
-                <div className="flex items-center gap-3 px-2 py-1 bg-white dark:bg-zinc-900 rounded-lg border border-zinc-200 dark:border-zinc-700 shrink-0 shadow-2xs">
-                  <div className="flex flex-col gap-0.5">
-                    <div className="flex items-center justify-between gap-1.5">
-                      <span className="text-[7.5px] font-bold text-emerald-600 uppercase">AI Urdu</span>
-                      <span className="text-[8px] font-mono font-bold text-emerald-600">{stats.progress}%</span>
-                    </div>
-                    <div className="h-1.5 w-16 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-emerald-500 transition-all duration-300 rounded-full" 
-                        style={{ width: `${stats.progress}%` }} 
-                      />
-                    </div>
-                  </div>
-                  <div className="h-4 w-px bg-zinc-200 dark:bg-zinc-700" />
-                  <div className="flex flex-col gap-0.5">
-                    <div className="flex items-center justify-between gap-1.5">
-                      <span className="text-[7.5px] font-bold text-blue-600 uppercase">Google</span>
-                      <span className="text-[8px] font-mono font-bold text-blue-600">{stats.googleProgress}%</span>
-                    </div>
-                    <div className="h-1.5 w-16 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-blue-500 transition-all duration-300 rounded-full" 
-                        style={{ width: `${stats.googleProgress}%` }} 
-                      />
-                    </div>
-                  </div>
-                </div>
+              )}
 
-                {(isTranslating || isGoogleTranslatingAll) && (
-                  <button 
-                    onClick={() => setIsWorkerMonitorOpen(!isWorkerMonitorOpen)}
-                    className="p-1.5 bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-200 rounded-lg transition-all shrink-0 animate-pulse border border-emerald-300 dark:border-emerald-700"
-                    title="Worker Monitor"
-                  >
-                    <Activity size={13} />
-                  </button>
+              <div
+                className={cn(
+                  'relative',
+                  !isMobileViewport || isFullScreen
+                    ? 'flex-1 min-h-0 overflow-auto'
+                    : !useMobileCards
+                    ? 'overflow-x-auto'
+                    : ''
                 )}
-              </div>
-            }
-          >
-            <div className="flex flex-col h-full">
-              {/* Alert if all 3 text columns are hidden */}
-              {!visibleColumns.original && !visibleColumns.ai && !visibleColumns.google && (
-                <div className="p-2.5 px-4 bg-amber-50 dark:bg-amber-950/40 border-b border-amber-200 dark:border-amber-800/60 text-amber-800 dark:text-amber-200 text-xs flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <AlertCircle size={14} className="text-amber-600 shrink-0" />
-                    <span>All subtitle text columns are currently hidden. Select at least one column to display text.</span>
+              >
+                {useMobileCards ? (
+                  <div className="p-2 space-y-2">
+                    {filteredSubtitles.length === 0 ? (
+                      <div className="py-8 px-4 text-center flex flex-col items-center gap-2.5">
+                        <div className="p-2.5 rounded-xl bg-emerald-500/10" style={{ color: 'var(--theme-accent)' }}>
+                          <FileText size={26} />
+                        </div>
+                        <p className="text-xs font-bold">No Subtitle Entries Loaded</p>
+                        <p className="text-[11px] opacity-65 max-w-xs">
+                          Load a file from device storage or import via URL on Home.
+                        </p>
+                        <div className="flex flex-wrap items-center justify-center gap-2 mt-1">
+                          {!hasAnySubtitlesInApp && (
+                            <button
+                              type="button"
+                              onClick={loadSampleSubtitles}
+                              className="px-3 py-1.5 text-white rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                              style={{ backgroundColor: 'var(--theme-accent)' }}
+                            >
+                              <Sparkles size={12} />
+                              <span>Load Demo</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setActiveTab('home')}
+                            className="px-3 py-1.5 rounded-lg border text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                            style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+                          >
+                            <Home size={12} />
+                            <span>Home</span>
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      progressiveWorkspaceSubtitles.map((item) => (
+                        <div key={item.index} className="perf-row">
+                          <MobileSubtitleCard
+                            item={item}
+                            viewMode={preferences.mobileSubtitleView}
+                            focusStream={mobileFocusStream}
+                            isSelected={selectedIndices.has(item.index)}
+                            onToggleSelect={toggleSelectRow}
+                            onOpenEditor={(idx) => handleOpenEditor(idx)}
+                            onTranslateGoogle={translateSingleRowGoogle}
+                            visibleColumns={visibleColumns}
+                            originalFont={originalFont}
+                            originalFontSize={originalFontSize}
+                            urduFont={urduFont}
+                            translatedFontSize={translatedFontSize}
+                            googleFont={googleFont}
+                            googleFontSize={googleFontSize}
+                            isGlobalFontActive={isGlobalFontActive}
+                            globalFont={globalFont}
+                            globalFontSize={globalFontSize}
+                            activeStylingConfig={activeStylingConfig}
+                            isStylingPreviewActive={isWorkspaceStylingPreview}
+                            isReadOnly={isReadOnly}
+                            onEditOriginal={handleManualEditOriginal}
+                            onEditTranslated={handleManualEdit}
+                            onEditGoogle={handleManualEditGoogle}
+                            onOpenWatermark={() => setIsWatermarkModalOpen(true)}
+                            qcIssue={qcAnalysis.map.get(item.index)}
+                            showQcBadges={preferences.optionalFeatures.enableQcInspector}
+                            canUndoBlock={canUndoBlock(item.index)}
+                            canRedoBlock={canRedoBlock(item.index)}
+                            onUndoBlock={handleUndoBlock}
+                            onRedoBlock={handleRedoBlock}
+                            onLongPressField={(idx, field, pos) => setFieldActionMenu({ index: idx, field, x: pos.x, y: pos.y })}
+                            onLongPressColumn={(field, pos) => setColumnHistoryMenu({ field, x: pos.x, y: pos.y })}
+                            editTriggerTarget={editTriggerTarget}
+                          />
+                        </div>
+                      ))
+                    )}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setVisibleColumns(prev => ({ ...prev, original: true, ai: true, google: true }))}
-                    className="px-2 py-0.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-[10px] font-bold cursor-pointer"
+                ) : (
+                <table className="w-max min-w-full text-left border-collapse">
+                  <thead
+                    className="sticky top-0 backdrop-blur-md z-20 border-b"
+                    style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
                   >
-                    Show All Columns
-                  </button>
-                </div>
-              )}
-
-              {/* Workspace Stylized Subtitles Live Preview Bar */}
-              {isWorkspaceStylingPreview && (
-                <div className="p-2.5 px-4 bg-gradient-to-r from-amber-500/10 via-emerald-500/10 to-indigo-500/10 border-b border-zinc-200 dark:border-zinc-800 flex flex-wrap items-center justify-between gap-2 text-xs">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <div className="p-1.5 rounded-lg bg-amber-500/20 text-amber-600 dark:text-amber-400">
-                      <Sparkles size={13} />
-                    </div>
-                    <span className="font-bold text-zinc-800 dark:text-zinc-200 text-[11px]">
-                      Styling Studio Applied Styles:
-                    </span>
-                    <span className="px-2 py-0.5 rounded-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 font-mono text-[9.5px] font-bold text-emerald-700 dark:text-emerald-300">
-                      {GRADIENT_PALETTES.find(p => p.id === activeStylingConfig.paletteId)?.name || 'Custom'} • {activeStylingConfig.gradientMode}
-                    </span>
-                    <span className="text-[9.5px] text-zinc-500 dark:text-zinc-400">
-                      Active on: <strong className="text-zinc-700 dark:text-zinc-300 uppercase">{activeStylingConfig.targetStreams === 'all' ? 'All 3 Streams (Original + AI + Google)' : activeStylingConfig.targetStreams}</strong>
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setIsWorkspaceStylingPreview(prev => !prev)}
-                      className={cn(
-                        "px-2 py-1 rounded-lg text-[9.5px] font-bold flex items-center gap-1 transition-colors border cursor-pointer",
-                        isWorkspaceStylingPreview
-                          ? "bg-emerald-600 text-white border-emerald-600"
-                          : "bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700"
-                      )}
-                    >
-                      <Eye size={11} />
-                      <span>{isWorkspaceStylingPreview ? "Preview: Active" : "Preview: Paused"}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setIsStylingDrawerOpen(true)}
-                      className="px-2 py-1 rounded-lg text-[9.5px] font-bold bg-white dark:bg-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-750 text-zinc-700 dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700 flex items-center gap-1 cursor-pointer"
-                    >
-                      <Sliders size={11} className="text-indigo-500" />
-                      <span>Open Styling Studio</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const styled = applyGradientsToSubtitles(
-                          subtitles,
-                          activeStylingConfig.paletteId,
-                          activeStylingConfig.gradientMode,
-                          activeStylingConfig.targetStreams,
-                          {
-                            customColors: activeStylingConfig.customColors,
-                            boldEmphasis: activeStylingConfig.boldEmphasis,
-                            italicize: activeStylingConfig.italicize,
-                            uppercaseOriginal: activeStylingConfig.transformCase === 'uppercase'
-                          }
-                        );
-                        setSubtitles(styled);
-                        addNotification("Bake & applied all styles to subtitle project!", "success");
-                      }}
-                      className="px-2 py-1 rounded-lg text-[9.5px] font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs flex items-center gap-1 cursor-pointer"
-                      title="Bake active styles permanently into subtitle project"
-                    >
-                      <Check size={11} />
-                      <span>Bake All Styles</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              <div className="overflow-auto flex-1 relative max-h-full">
-                <table className="w-full text-left border-collapse min-w-[700px]">
-                  <thead className="sticky top-0 bg-zinc-50/95 dark:bg-zinc-900/95 backdrop-blur-md z-20 shadow-xs">
-                    <tr className="border-b border-zinc-200 dark:border-zinc-700/80 text-zinc-500 dark:text-zinc-400">
-                      <th className="p-3 text-[9px] font-bold uppercase tracking-widest w-14 text-center">
-                        <div className="flex flex-col items-center gap-1">
-                          <input 
+                    <tr className="opacity-85">
+                      <th
+                        className="sticky left-0 z-30 p-1.5 text-[9px] font-semibold uppercase tracking-wider w-10 text-center border-r"
+                        style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+                      >
+                        <div className="flex flex-col items-center gap-0.5">
+                          <input
                             type="checkbox"
                             checked={filteredSubtitles.length > 0 && selectedIndices.size === filteredSubtitles.length}
                             onChange={toggleSelectAll}
-                            className="accent-emerald-600 rounded cursor-pointer w-3.5 h-3.5"
-                            title={selectedIndices.size > 0 ? "Deselect all" : "Select all visible"}
+                            className="rounded cursor-pointer w-3 h-3"
+                            title={selectedIndices.size > 0 ? 'Deselect all' : 'Select all'}
                           />
                           <span>#</span>
                         </div>
                       </th>
                       {visibleColumns.time && (
-                        <th className="p-3 text-[9px] font-bold uppercase tracking-widest w-36">
-                          <div className="flex items-center gap-1.5">
-                            <input 
+                        <th className="p-1.5 text-[9px] font-semibold uppercase tracking-wider w-28">
+                          <label className="inline-flex items-center gap-1 cursor-pointer select-none">
+                            <input
                               type="checkbox"
                               checked={studioColumnsToDisplay.time}
-                              onChange={(e) => setStudioColumnsToDisplay(prev => ({ ...prev, time: e.target.checked }))}
-                              className="accent-emerald-600 rounded cursor-pointer w-3.5 h-3.5"
-                              title="Display Time column in Dedicated Editor Studio (checked = visible)"
+                              onChange={(e) => setStudioColumnsToDisplay((prev) => ({ ...prev, time: e.target.checked }))}
+                              className="rounded cursor-pointer w-3 h-3"
                             />
                             <span>Time</span>
-                          </div>
+                          </label>
                         </th>
                       )}
                       {visibleColumns.original && (
-                        <th className="p-3 text-[9px] font-bold uppercase tracking-widest min-w-[200px]">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <label className="inline-flex items-center gap-1.5 cursor-pointer select-none text-zinc-700 dark:text-zinc-200 hover:text-emerald-600 dark:hover:text-emerald-400" title="Display Original column in Dedicated Editor Studio (checked = visible)">
-                              <input 
-                                type="checkbox"
-                                checked={studioColumnsToDisplay.original}
-                                onChange={(e) => setStudioColumnsToDisplay(prev => ({ ...prev, original: e.target.checked }))}
-                                className="accent-emerald-600 rounded cursor-pointer w-3.5 h-3.5"
-                              />
-                              <span>Original Language</span>
-                            </label>
-                            <span className="text-[8px] font-normal px-1.5 py-0.5 rounded bg-zinc-200/70 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 font-mono">
-                              {translationSettings.sourceLanguage === 'auto' ? 'Source' : translationSettings.sourceLanguage.toUpperCase()}
-                            </span>
-                            {(activeStylingConfig.targetStreams === 'all' || activeStylingConfig.targetStreams === 'both' || activeStylingConfig.targetStreams === 'original') && isWorkspaceStylingPreview && (
-                              <span className="text-[8px] font-bold px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 font-mono">
-                                Stylized
+                        <th
+                          onTouchStart={(e) => startColHeaderLongPress(e, 'orig')}
+                          onTouchMove={moveColHeaderLongPress}
+                          onTouchEnd={clearColHeaderLongPress}
+                          onTouchCancel={clearColHeaderLongPress}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setColumnHistoryMenu({ field: 'orig', x: e.clientX, y: e.clientY });
+                          }}
+                          className="p-1.5 text-[9px] font-semibold uppercase tracking-wider min-w-[200px]"
+                          title="Long-press or right-click column for Original Undo/Redo"
+                        >
+                          <div className="flex items-center justify-between gap-1.5 flex-wrap">
+                            <div className="flex items-center gap-1">
+                              <label className="inline-flex items-center gap-1 cursor-pointer select-none">
+                                <input
+                                  type="checkbox"
+                                  checked={studioColumnsToDisplay.original}
+                                  onChange={(e) => setStudioColumnsToDisplay((prev) => ({ ...prev, original: e.target.checked }))}
+                                  className="rounded cursor-pointer w-3 h-3"
+                                />
+                                <span>Original</span>
+                              </label>
+                              <span className="font-mono opacity-60">
+                                · {translationSettings.sourceLanguage === 'auto' ? 'Auto' : translationSettings.sourceLanguage.toUpperCase()}
                               </span>
-                            )}
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => setVisibleColumns((prev) => ({ ...prev, original: true, ai: false, google: false }))}
+                                className="px-1.5 py-0.5 rounded border text-[8.5px] font-semibold cursor-pointer opacity-80 hover:opacity-100"
+                                style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+                                title="Focus Original column only"
+                              >
+                                Solo
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditor(undefined, 'orig')}
+                                className="px-1.5 py-0.5 rounded border text-[8.5px] font-semibold cursor-pointer"
+                                style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)', color: 'var(--theme-accent)' }}
+                                title="Edit Original stream in Studio"
+                              >
+                                Studio
+                              </button>
+                            </div>
                           </div>
                         </th>
                       )}
                       {visibleColumns.ai && (
-                        <th className="p-3 text-[9px] font-bold uppercase tracking-widest min-w-[220px]">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <label className="inline-flex items-center gap-1.5 cursor-pointer select-none text-zinc-700 dark:text-zinc-200 hover:text-emerald-600 dark:hover:text-emerald-400" title="Display AI Translated column in Dedicated Editor Studio (checked = visible)">
-                              <input 
-                                type="checkbox"
-                                checked={studioColumnsToDisplay.ai}
-                                onChange={(e) => setStudioColumnsToDisplay(prev => ({ ...prev, ai: e.target.checked }))}
-                                className="accent-emerald-600 rounded cursor-pointer w-3.5 h-3.5"
-                              />
-                              <span>AI Translated Language</span>
-                            </label>
-                            <span className="text-[8px] font-normal px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 font-mono font-bold">
-                              {TARGET_LANGUAGES.find(l => l.code === translationSettings.targetLanguage)?.name || 'Urdu'} • {SCRIPT_MODES.find(s => s.id === translationSettings.scriptMode)?.badge || 'اردو'}
-                            </span>
-                            {(activeStylingConfig.targetStreams === 'all' || activeStylingConfig.targetStreams === 'both' || activeStylingConfig.targetStreams === 'translated') && isWorkspaceStylingPreview && (
-                              <span className="text-[8px] font-bold px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 font-mono">
-                                Stylized
+                        <th
+                          onTouchStart={(e) => startColHeaderLongPress(e, 'ai')}
+                          onTouchMove={moveColHeaderLongPress}
+                          onTouchEnd={clearColHeaderLongPress}
+                          onTouchCancel={clearColHeaderLongPress}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setColumnHistoryMenu({ field: 'ai', x: e.clientX, y: e.clientY });
+                          }}
+                          className="p-1.5 text-[9px] font-semibold uppercase tracking-wider min-w-[220px]"
+                          title="Long-press or right-click column for AI Translation Undo/Redo"
+                        >
+                          <div className="flex items-center justify-between gap-1.5 flex-wrap">
+                            <div className="flex items-center gap-1">
+                              <label className="inline-flex items-center gap-1 cursor-pointer select-none">
+                                <input
+                                  type="checkbox"
+                                  checked={studioColumnsToDisplay.ai}
+                                  onChange={(e) => setStudioColumnsToDisplay((prev) => ({ ...prev, ai: e.target.checked }))}
+                                  className="rounded cursor-pointer w-3 h-3"
+                                />
+                                <span>AI Translation</span>
+                              </label>
+                              <span className="font-mono opacity-65">
+                                · {TARGET_LANGUAGES.find((l) => l.code === translationSettings.targetLanguage)?.name || 'Urdu'}
                               </span>
-                            )}
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setTranslationSettings((prev) => ({
+                                    ...prev,
+                                    scriptMode: prev.scriptMode === 'urdu-script' ? 'roman-urdu' : 'urdu-script',
+                                  }))
+                                }
+                                className="px-1.5 py-0.5 rounded border text-[8.5px] font-semibold cursor-pointer"
+                                style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+                                title="Switch script mode (Urdu / Roman)"
+                              >
+                                {SCRIPT_MODES.find((s) => s.id === translationSettings.scriptMode)?.badge || 'اردو'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setTranslationSettings((prev) => ({
+                                    ...prev,
+                                    scriptMode: prev.scriptMode.startsWith('bilingual') ? 'urdu-script' : 'bilingual-en-ur',
+                                  }))
+                                }
+                                className={cn(
+                                  'px-1.5 py-0.5 rounded border text-[8.5px] font-semibold cursor-pointer',
+                                  translationSettings.scriptMode.startsWith('bilingual') && 'text-white'
+                                )}
+                                style={
+                                  translationSettings.scriptMode.startsWith('bilingual')
+                                    ? { backgroundColor: 'var(--theme-accent)', borderColor: 'var(--theme-accent)' }
+                                    : { backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }
+                                }
+                                title="Toggle Bilingual mode"
+                              >
+                                Bi
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditor(undefined, 'ai')}
+                                className="px-1.5 py-0.5 rounded border text-[8.5px] font-semibold cursor-pointer"
+                                style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)', color: 'var(--theme-accent)' }}
+                                title="Edit AI stream in Studio"
+                              >
+                                Studio
+                              </button>
+                            </div>
                           </div>
                         </th>
                       )}
                       {visibleColumns.google && (
-                        <th className="p-3 text-[9px] font-bold uppercase tracking-widest min-w-[180px]">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <label className="inline-flex items-center gap-1.5 cursor-pointer select-none text-zinc-700 dark:text-zinc-200 hover:text-emerald-600 dark:hover:text-emerald-400" title="Display Google Translation column in Dedicated Editor Studio (checked = visible)">
-                              <input 
+                        <th
+                          onTouchStart={(e) => startColHeaderLongPress(e, 'google')}
+                          onTouchMove={moveColHeaderLongPress}
+                          onTouchEnd={clearColHeaderLongPress}
+                          onTouchCancel={clearColHeaderLongPress}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setColumnHistoryMenu({ field: 'google', x: e.clientX, y: e.clientY });
+                          }}
+                          className="p-1.5 text-[9px] font-semibold uppercase tracking-wider min-w-[200px]"
+                          title="Long-press or right-click column for Neutral/Google Undo/Redo"
+                        >
+                          <div className="flex items-center justify-between gap-1.5 flex-wrap">
+                            <label className="inline-flex items-center gap-1 cursor-pointer select-none">
+                              <input
                                 type="checkbox"
                                 checked={studioColumnsToDisplay.google}
-                                onChange={(e) => setStudioColumnsToDisplay(prev => ({ ...prev, google: e.target.checked }))}
-                                className="accent-emerald-600 rounded cursor-pointer w-3.5 h-3.5"
+                                onChange={(e) => setStudioColumnsToDisplay((prev) => ({ ...prev, google: e.target.checked }))}
+                                className="rounded cursor-pointer w-3 h-3"
                               />
-                              <span>Google Translation</span>
+                              <span>Neutral / Google</span>
                             </label>
-                            <span className="text-[8px] font-normal px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300">
-                              Machine
-                            </span>
-                            {(activeStylingConfig.targetStreams === 'all' || activeStylingConfig.targetStreams === 'google') && isWorkspaceStylingPreview && (
-                              <span className="text-[8px] font-bold px-1.5 py-0.2 rounded bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300 font-mono">
-                                Stylized
-                              </span>
-                            )}
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => setVisibleColumns({ time: true, original: true, ai: true, google: true })}
+                                className="px-1.5 py-0.5 rounded border text-[8.5px] font-semibold cursor-pointer opacity-80 hover:opacity-100"
+                                style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+                                title="Show all columns"
+                              >
+                                All
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditor(undefined, 'google')}
+                                className="px-1.5 py-0.5 rounded border text-[8.5px] font-semibold cursor-pointer"
+                                style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)', color: 'var(--theme-accent)' }}
+                                title="Edit Neutral stream in Studio"
+                              >
+                                Studio
+                              </button>
+                            </div>
                           </div>
                         </th>
                       )}
-                      <th className="p-3 text-[9px] font-bold uppercase tracking-widest w-20 text-center">Action</th>
+                      <th className="p-1.5 text-[9px] font-semibold uppercase tracking-wider w-16 text-center">Edit</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-zinc-200/60 dark:divide-zinc-700/40">
+                  <tbody>
                     {filteredSubtitles.length === 0 && (
                       <tr>
-                        <td 
-                          colSpan={1 + (visibleColumns.time ? 1 : 0) + (visibleColumns.original ? 1 : 0) + (visibleColumns.ai ? 1 : 0) + (visibleColumns.google ? 1 : 0) + 1} 
-                          className="p-12 text-center"
+                        <td
+                          colSpan={1 + (visibleColumns.time ? 1 : 0) + (visibleColumns.original ? 1 : 0) + (visibleColumns.ai ? 1 : 0) + (visibleColumns.google ? 1 : 0) + 1}
+                          className="p-8 text-center"
                         >
-                          <div className="flex flex-col items-center gap-3 max-w-md mx-auto text-zinc-400 dark:text-zinc-500">
-                            <div className="p-3 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-                              <FileText size={36} className="stroke-[1.5]" />
-                            </div>
-                            <div>
-                              <p className="text-sm font-bold text-zinc-700 dark:text-zinc-200">No Subtitle Entries Loaded</p>
-                              <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">Upload your caption file or load cinematic sample subtitles to test fonts, sizing, and translations immediately.</p>
-                            </div>
-                            <div className="flex items-center gap-2 mt-2">
-                              <button
-                                type="button"
-                                onClick={loadSampleSubtitles}
-                                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+                          <div className="flex flex-col items-center gap-2 max-w-xs mx-auto">
+                            <FileText size={24} style={{ color: 'var(--theme-accent)' }} />
+                            <p className="text-xs font-semibold">No Subtitles Loaded</p>
+                            <div className="flex items-center gap-2 mt-1">
+                              {!hasAnySubtitlesInApp && (
+                                <button
+                                  type="button"
+                                  onClick={loadSampleSubtitles}
+                                  className="px-3 py-1.5 text-white rounded-lg text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                                  style={{ backgroundColor: 'var(--theme-accent)' }}
+                                >
+                                  <Sparkles size={12} />
+                                  <span>Load Demo</span>
+                                </button>
+                              )}
+                              <label
+                                className="px-3 py-1.5 rounded-lg border text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                                style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
                               >
-                                <Sparkles size={13} />
-                                <span>Load Sample Subtitles</span>
-                              </button>
-                              <label className="px-3.5 py-1.5 bg-zinc-200 dark:bg-zinc-700 hover:bg-zinc-300 dark:hover:bg-zinc-600 text-zinc-800 dark:text-zinc-200 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer">
-                                <Upload size={13} />
-                                <span>Upload File</span>
+                                <Upload size={12} />
+                                <span>Import</span>
                                 <input type="file" accept=".srt,.vtt,.ass,.ssa,.sbv,.lrc,.json,.txt" onChange={handleFileUpload} className="hidden" />
                               </label>
                             </div>
@@ -5526,9 +5410,9 @@ export default function App() {
                       </tr>
                     )}
                     {progressiveWorkspaceSubtitles.map((item) => (
-                      <SubtitleRow 
-                        key={item.index} 
-                        item={item} 
+                      <SubtitleRow
+                        key={item.index}
+                        item={item}
                         onOpenEditor={handleOpenEditor}
                         onTranslateGoogle={translateSingleRowGoogle}
                         isSelected={selectedIndices.has(item.index)}
@@ -5550,161 +5434,148 @@ export default function App() {
                         onEditTranslated={handleManualEdit}
                         onEditGoogle={handleManualEditGoogle}
                         onOpenWatermark={() => setIsWatermarkModalOpen(true)}
+                        canUndoBlock={canUndoBlock(item.index)}
+                        canRedoBlock={canRedoBlock(item.index)}
+                        onUndoBlock={handleUndoBlock}
+                        onRedoBlock={handleRedoBlock}
+                        onLongPressField={(idx, field, pos) => setFieldActionMenu({ index: idx, field, x: pos.x, y: pos.y })}
+                        onLongPressColumn={(field, pos) => setColumnHistoryMenu({ field, x: pos.x, y: pos.y })}
+                        editTriggerTarget={editTriggerTarget}
                       />
                     ))}
                   </tbody>
                 </table>
+                )}
               </div>
-
-              {/* Pagination Bar for instant 60fps rendering without DOM layout recalculation lag */}
-              {filteredSubtitles.length > 0 && (
-                <div className="p-2.5 px-4 border-t border-zinc-200 dark:border-zinc-700/60 bg-zinc-50 dark:bg-zinc-900/60 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs shrink-0 select-none">
-                  <div className="text-[11px] text-zinc-500 dark:text-zinc-400 font-medium">
-                    Showing <span className="font-bold text-zinc-800 dark:text-zinc-200">{pageSize === 0 ? 1 : (currentPage - 1) * pageSize + 1}</span> to <span className="font-bold text-zinc-800 dark:text-zinc-200">{pageSize === 0 ? filteredSubtitles.length : Math.min(currentPage * pageSize, filteredSubtitles.length)}</span> of <span className="font-bold text-zinc-800 dark:text-zinc-200">{filteredSubtitles.length}</span> segments
-                    {searchTerm && <span className="ml-1 text-emerald-600 dark:text-emerald-400">(filtered)</span>}
-                  </div>
-
-                  <div className="flex items-center gap-3">
-                    {/* Rows per page selector */}
-                    <div className="flex items-center gap-1.5 text-[10px] text-zinc-500 dark:text-zinc-400">
-                      <span>Per page:</span>
-                      {[25, 50, 100, 0].map(size => (
-                        <button
-                          key={size}
-                          onClick={() => { setPageSize(size); setCurrentPage(1); }}
-                          className={cn(
-                            "px-2 py-0.5 rounded font-mono font-bold transition-colors",
-                            pageSize === size 
-                              ? "bg-emerald-600 text-white" 
-                              : "bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-zinc-600 dark:text-zinc-300"
-                          )}
-                        >
-                          {size === 0 ? "All" : size}
-                        </button>
-                      ))}
-                    </div>
-
-                    {/* Pagination buttons */}
-                    {pageSize > 0 && totalPages > 1 && (
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                          disabled={currentPage === 1}
-                          className="px-2.5 py-1 rounded bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 disabled:opacity-30 disabled:pointer-events-none text-zinc-700 dark:text-zinc-200 font-bold text-[10px]"
-                        >
-                          Prev
-                        </button>
-                        <span className="text-[10px] font-mono px-2 text-zinc-600 dark:text-zinc-300 font-bold">
-                          {currentPage} / {totalPages}
-                        </span>
-                        <button
-                          onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-                          disabled={currentPage === totalPages}
-                          className="px-2.5 py-1 rounded bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 disabled:opacity-30 disabled:pointer-events-none text-zinc-700 dark:text-zinc-200 font-bold text-[10px]"
-                        >
-                          Next
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
             </div>
           </ResizableBox>
-
-          {/* Logs */}
-          <ResizableBox 
-            title="System Logs" 
-            icon={Terminal} 
-            initialHeight={200} 
-            minHeight={150}
-            actions={
-              <button onClick={clearLogs} className="p-1.5 hover:bg-black/5 rounded-md text-black/40 hover:text-black/60 transition-colors">
-                <Trash2 size={12} />
-              </button>
-            }
-          >
-            <div className="p-4 font-mono text-[10px] space-y-1 dark:text-white/60">
-              {logs.map((log) => (
-                <div key={log.id} className="flex gap-3 border-b border-black/[0.01] dark:border-white/[0.01] pb-1">
-                  <span className="text-black/20 dark:text-white/20">[{log.timestamp}]</span>
-                  <span className={cn(
-                    "font-bold uppercase tracking-tighter w-14 shrink-0",
-                    log.type === 'success' && "text-emerald-600 dark:text-emerald-400",
-                    log.type === 'error' && "text-red-500 dark:text-red-400",
-                    log.type === 'warning' && "text-amber-500 dark:text-amber-400",
-                    log.type === 'info' && "text-blue-500 dark:text-blue-400"
-                  )}>{log.type}</span>
-                  <span>{log.message}</span>
-                </div>
-              ))}
-            </div>
-          </ResizableBox>
-        </div>
+          </div>
+        )}
       </main>
 
-      {/* Mobile Floating Quick Action Bar for Android Phone */}
-      <div className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md border-t border-zinc-200 dark:border-zinc-800 px-3 pt-2 pb-safe shadow-2xl flex items-center justify-around">
-        <button
-          type="button"
-          onClick={() => {
-            const el = document.getElementById('subtitles-workspace');
-            if (el) el.scrollIntoView({ behavior: 'smooth' });
+      {/* Always-Pinned Workspace Viewport Footer (sits right above auto-hiding bottom nav; totally hidden when keyboard is active) */}
+      {showWorkspacePinnedFooter && (
+        <footer
+          className={cn(
+            'fixed inset-x-0 z-30 mobile-fixed-chrome border-t backdrop-blur-md px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 text-[10px] select-none tabular-nums transition-[bottom] duration-200 shadow-sm',
+            isBottomNavVisible
+              ? 'bottom-[calc(48px+max(env(safe-area-inset-bottom,0px),6px))] lg:bottom-0'
+              : 'bottom-0 pb-safe lg:bottom-0',
+            isAnyOverlayOpen && 'pointer-events-none select-none'
+          )}
+          style={{
+            backgroundColor: 'var(--theme-header)',
+            borderColor: 'var(--theme-border)',
+            color: 'var(--theme-text)',
           }}
-          className="flex flex-col items-center gap-0.5 text-zinc-600 dark:text-zinc-400 hover:text-emerald-600 dark:hover:text-emerald-400 py-1 px-1.5 text-[10px] font-bold cursor-pointer"
         >
-          <FileText size={18} />
-          <span>Table</span>
-        </button>
+          <div className="opacity-75 font-medium">
+            {pageSize === 0 ? 1 : (currentPage - 1) * pageSize + 1}–{pageSize === 0 ? filteredSubtitles.length : Math.min(currentPage * pageSize, filteredSubtitles.length)} / {filteredSubtitles.length}
+            {searchTerm && <span className="ml-1" style={{ color: 'var(--theme-accent)' }}>(filtered)</span>}
+          </div>
 
-        <button
-          type="button"
-          onClick={() => handleOpenEditor()}
-          className="flex flex-col items-center gap-0.5 text-zinc-600 dark:text-zinc-400 hover:text-emerald-600 dark:hover:text-emerald-400 py-1 px-1.5 text-[10px] font-bold cursor-pointer"
-        >
-          <Edit3 size={18} />
-          <span>Edit</span>
-        </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-1">
+              <span className="opacity-60">Rows:</span>
+              {[25, 50, 100, 0].map((size) => (
+                <button
+                  key={size}
+                  type="button"
+                  onClick={() => {
+                    setPageSize(size);
+                    setCurrentPage(1);
+                  }}
+                  className={cn(
+                    'px-1.5 py-0.5 rounded font-mono font-semibold cursor-pointer border',
+                    pageSize === size ? 'text-white' : 'opacity-70'
+                  )}
+                  style={
+                    pageSize === size
+                      ? { backgroundColor: 'var(--theme-accent)', borderColor: 'var(--theme-accent)' }
+                      : { backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }
+                  }
+                >
+                  {size === 0 ? 'All' : size}
+                </button>
+              ))}
+            </div>
 
-        <button
-          type="button"
-          onClick={isTranslating ? stopTranslation : startTranslation}
-          disabled={subtitles.length === 0}
-          className="flex flex-col items-center gap-0.5 text-emerald-600 dark:text-emerald-400 py-1 px-1.5 text-[10px] font-bold disabled:opacity-40 cursor-pointer"
-        >
-          {isTranslating ? <Loader2 size={18} className="animate-spin text-emerald-500" /> : <Sparkles size={18} className="text-emerald-500" />}
-          <span>{isTranslating ? 'Stop' : 'AI Dub'}</span>
-        </button>
+            {pageSize > 0 && totalPages > 1 && (
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                  disabled={currentPage === 1}
+                  className="px-2 py-0.5 rounded border disabled:opacity-30 cursor-pointer font-semibold btn-inch-cap"
+                  style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+                >
+                  Prev
+                </button>
+                <span className="font-mono px-1 font-semibold">
+                  {currentPage}/{totalPages}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                  disabled={currentPage === totalPages}
+                  className="px-2 py-0.5 rounded border disabled:opacity-30 cursor-pointer font-semibold btn-inch-cap"
+                  style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+                >
+                  Next
+                </button>
+              </div>
+            )}
+          </div>
+        </footer>
+      )}
 
-        <button
-          type="button"
-          onClick={isGoogleTranslatingAll ? stopGoogleTranslate : translateAllGoogle}
-          disabled={subtitles.length === 0}
-          className="flex flex-col items-center gap-0.5 text-indigo-600 dark:text-indigo-400 py-1 px-1.5 text-[10px] font-bold disabled:opacity-40 cursor-pointer"
-        >
-          {isGoogleTranslatingAll ? <Loader2 size={18} className="animate-spin text-indigo-500" /> : <Languages size={18} />}
-          <span>{isGoogleTranslatingAll ? 'Stop G' : 'Google'}</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setIsStylingDrawerOpen(true)}
-          className="flex flex-col items-center gap-0.5 text-amber-600 dark:text-amber-400 py-1 px-1.5 text-[10px] font-bold cursor-pointer"
-        >
-          <Palette size={18} />
-          <span>Styling</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setIsUnifiedDownloadOpen(true)}
-          disabled={subtitles.length === 0}
-          className="flex flex-col items-center gap-0.5 text-zinc-700 dark:text-zinc-200 hover:text-emerald-500 py-1 px-1.5 text-[10px] font-bold disabled:opacity-40 cursor-pointer"
-        >
-          <Download size={18} />
-          <span>Export</span>
-        </button>
-      </div>
+      {/* Mobile Bottom 6-Tab Navigation (auto-hides on downward scroll, shows on upward scroll, totally hidden when keyboard is active) */}
+      {!isKeyboardActive && (
+      <nav
+        className={cn(
+          'lg:hidden fixed bottom-0 inset-x-0 z-40 mobile-fixed-chrome backdrop-blur-md border-t px-1 pt-0.5 pb-safe grid grid-cols-6 items-center transition-transform duration-200',
+          !isBottomNavVisible && 'translate-y-full pointer-events-none',
+          isAnyOverlayOpen && 'pointer-events-none select-none'
+        )}
+        style={{
+          backgroundColor: 'var(--theme-header)',
+          borderColor: 'var(--theme-border)',
+          color: 'var(--theme-text)',
+        }}
+      >
+        {TAB_ITEMS.map((tab) => {
+          const Icon = tab.icon;
+          const isActive = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setActiveTab(tab.id)}
+              className={cn(
+                'relative flex flex-col items-center justify-center gap-0.5 py-1 min-h-[46px] min-w-0 text-[9.5px] font-semibold transition-colors cursor-pointer',
+                isActive ? 'opacity-100' : 'opacity-55 hover:opacity-90'
+              )}
+              style={isActive ? { color: 'var(--theme-accent)' } : undefined}
+            >
+              {isActive && (
+                <span
+                  className="absolute top-0 w-7 h-[2px] rounded-full"
+                  style={{ backgroundColor: 'var(--theme-accent)' }}
+                />
+              )}
+              <div className="relative">
+                {tab.id === 'translator' && (isTranslating || isGoogleTranslatingAll) ? (
+                  <Loader2 size={17} className="animate-spin" />
+                ) : (
+                  <Icon size={17} />
+                )}
+              </div>
+              <span className="truncate max-w-full px-0.5">{tab.shortLabel}</span>
+            </button>
+          );
+        })}
+      </nav>
+      )}
 
       {/* Translation Settings Modal */}
       <TranslationSettingsModal
@@ -5724,7 +5595,11 @@ export default function App() {
         isOpen={isStylizerOpen}
         onClose={() => setIsStylizerOpen(false)}
         subtitles={subtitles}
-        onApply={(styledSubs) => setSubtitles(styledSubs)}
+        onApply={(styledSubs) => {
+          updateSubtitles(styledSubs);
+          setHasAppliedCustomStyle(true);
+          setIsWorkspaceStylingPreview(true);
+        }}
         urduFont={urduFont}
         translatedFontSize={translatedFontSize}
         fileName={fileName}
@@ -5807,10 +5682,12 @@ export default function App() {
         onClose={() => {
           setIsEditorModalOpen(false);
           setEditorFocusIndex(undefined);
+          setEditorFocusStream(undefined);
         }}
         subtitles={subtitles}
         onUpdateSubtitles={updateSubtitles}
         initialFocusIndex={editorFocusIndex}
+        initialFocusStream={editorFocusStream}
         fileName={fileName}
         detectedFormat={detectedFormat}
         urduFont={urduFont}
@@ -5844,37 +5721,13 @@ export default function App() {
         onAddNotification={addNotification}
         onAddLog={addLog}
         onLoadSampleSubtitles={loadSampleSubtitles}
+        hasAnySubtitlesInApp={hasAnySubtitlesInApp}
         onFileUpload={handleFileUpload}
         editorColumns={studioColumnsToDisplay}
         onUpdateEditorColumns={setStudioColumnsToDisplay}
       />
 
-      {/* Screen Edge Pull Drawers: Left Edge for AI Cinema, Right Edge for Styling Studio */}
-      <button 
-        type="button"
-        onClick={() => setIsAiCinemaOpen(true)} 
-        className="fixed left-0 top-1/2 -translate-y-1/2 z-40 bg-gradient-to-b from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white py-3.5 px-1.5 rounded-r-xl shadow-xl flex flex-col items-center gap-1.5 hover:pl-2.5 transition-all cursor-pointer group border-y border-r border-indigo-400/30"
-        title="Pull out AI Cinema Studio (Left Edge)"
-      >
-        <Clapperboard size={15} className="group-hover:scale-110 transition-transform" />
-        <span className="text-[9px] font-bold uppercase tracking-widest [writing-mode:vertical-rl] rotate-180 select-none">
-          AI Cinema
-        </span>
-      </button>
-
-      <button 
-        type="button"
-        onClick={() => setIsStylingDrawerOpen(true)} 
-        className="fixed right-0 top-1/2 -translate-y-1/2 z-40 bg-gradient-to-b from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white py-3.5 px-1.5 rounded-l-xl shadow-xl flex flex-col items-center gap-1.5 hover:pr-2.5 transition-all cursor-pointer group border-y border-l border-rose-400/30"
-        title="Pull out Gradient Studio (Right Edge)"
-      >
-        <Palette size={15} className="group-hover:rotate-12 transition-transform" />
-        <span className="text-[9px] font-bold uppercase tracking-widest [writing-mode:vertical-rl] select-none">
-          Styling Studio
-        </span>
-      </button>
-
-      {/* AI Cinema Workspace Drawer (Pull from Left Edge) */}
+      {/* AI Cinema Studio Drawer (Launched from Home More Tools & Menu) */}
       <AiCinemaDrawer
         isOpen={isAiCinemaOpen}
         onClose={() => setIsAiCinemaOpen(false)}
@@ -5888,29 +5741,38 @@ export default function App() {
         onAddNotification={addNotification}
       />
 
-      {/* Styling Studio Drawer (Pull from Right Edge) */}
+      {/* Styling Studio Drawer (Auto-bakes on close if styling changes are pending) */}
       <StylingStudioDrawer
         isOpen={isStylingDrawerOpen}
-        onClose={() => setIsStylingDrawerOpen(false)}
+        onClose={() => {
+          setIsStylingDrawerOpen(false);
+          if (hasPendingStyleBake && subtitles.length > 0) {
+            handleBakeAllStyles(true);
+          }
+        }}
         subtitles={subtitles}
         onApply={(styledSubtitles) => {
-          setSubtitles(styledSubtitles);
+          updateSubtitles(styledSubtitles);
+          setHasAppliedCustomStyle(true);
           setIsWorkspaceStylingPreview(true);
-          addNotification("Applied stylized subtitle configuration to Translation Workspace", "success");
+          setHasPendingStyleBake(false);
+          addNotification("Applied stylized subtitle configuration to Translation Workspace", "saved");
         }}
         urduFont={urduFont}
-        onUpdateUrduFont={setUrduFont}
+        onUpdateUrduFont={(f) => { setUrduFont(f); setHasPendingStyleBake(true); }}
         originalFont={originalFont}
-        onUpdateOriginalFont={setOriginalFont}
+        onUpdateOriginalFont={(f) => { setOriginalFont(f); setHasPendingStyleBake(true); }}
         translatedFontSize={translatedFontSize}
-        onUpdateTranslatedFontSize={setTranslatedFontSize}
+        onUpdateTranslatedFontSize={(s) => { setTranslatedFontSize(s); setHasPendingStyleBake(true); }}
         originalFontSize={originalFontSize}
-        onUpdateOriginalFontSize={setOriginalFontSize}
+        onUpdateOriginalFontSize={(s) => { setOriginalFontSize(s); setHasPendingStyleBake(true); }}
         fileName={fileName}
         activeStylingConfig={activeStylingConfig}
         onUpdateActiveStyling={(newConfig) => {
           setActiveStylingConfig(newConfig);
+          setHasAppliedCustomStyle(true);
           setIsWorkspaceStylingPreview(true);
+          setHasPendingStyleBake(true);
         }}
         onAddLog={addLog}
         onAddNotification={addNotification}
@@ -5950,9 +5812,10 @@ export default function App() {
         isOpen={isAiConfigOpen}
         onClose={() => setIsAiConfigOpen(false)}
         selectedModel={selectedModel}
-        onUpdateModel={setSelectedModel}
-        customApiKey={customApiKey}
-        onUpdateApiKey={setCustomApiKey}
+        onUpdateModel={(newModel) => {
+          setSelectedModel(newModel);
+          updateGeminiConfig(newModel);
+        }}
         onConnectGemini={connectGemini}
         connectStatus={geminiConnectStatus}
         isGeminiConnected={isGeminiConnected}
@@ -5977,11 +5840,795 @@ export default function App() {
         fileName={fileName}
       />
 
-      {/* Android Mobile App & APK Guide Modal */}
-      <AndroidGuideModal
-        isOpen={isAndroidGuideOpen}
-        onClose={() => setIsAndroidGuideOpen(false)}
-        onAddNotification={addNotification}
+      {/* Subtle Right-Edge Swipe Zone (slide left from screen edge to open active tab drawer) */}
+      {hasActiveDrawerForTab && !isCurrentTabDrawerOpen && !isAnyOverlayOpen && !isKeyboardActive && (
+        <div
+          aria-hidden="true"
+          className="fixed right-0 top-[52px] bottom-[62px] lg:bottom-0 w-4 z-[55]"
+          style={{ touchAction: 'pan-y' }}
+        />
+      )}
+
+      {/* Exclusive Floating Bottom-Right Controls per Tab (hidden during keyboard input or open overlay) */}
+      {activeTab === 'home' && !isHomeDrawerOpen && !isKeyboardActive && (
+        <button
+          type="button"
+          onClick={() => setIsHomeDrawerOpen(true)}
+          className={cn(
+            'fixed right-3.5 sm:right-5 z-[60] h-11 min-w-[46px] px-3.5 rounded-2xl border shadow-lg flex items-center justify-center gap-1.5 cursor-pointer touch-tactile transition-[bottom] duration-200 btn-inch-cap',
+            isBottomNavVisible
+              ? 'bottom-[calc(54px+max(env(safe-area-inset-bottom,0px),6px))] lg:bottom-5'
+              : 'bottom-[calc(14px+max(env(safe-area-inset-bottom,0px),6px))] lg:bottom-5',
+            isAnyOverlayOpen && 'pointer-events-none select-none'
+          )}
+          style={{
+            backgroundColor: 'var(--theme-accent)',
+            borderColor: 'rgba(255,255,255,0.18)',
+            color: '#ffffff',
+          }}
+          title="Open My Subtitles Folder Drawer (or swipe left from right edge)"
+          aria-label="Open My Subtitles Folder Drawer"
+        >
+          <FolderPlus size={16} className="shrink-0" />
+          <span className="text-[11px] font-semibold tracking-tight leading-none truncate">Files</span>
+        </button>
+      )}
+
+      {/* Translator Tab: Stacked Translation Buttons + Progress Drawer Trigger in Bottom-Right Corner */}
+      {activeTab === 'translator' && !isTranslatorDrawerOpen && !isKeyboardActive && (
+        <div
+          className={cn(
+            'fixed right-3.5 sm:right-5 z-[60] flex flex-col items-end gap-1.5 transition-[bottom] duration-200',
+            isBottomNavVisible
+              ? 'bottom-[calc(54px+max(env(safe-area-inset-bottom,0px),6px))] lg:bottom-5'
+              : 'bottom-[calc(14px+max(env(safe-area-inset-bottom,0px),6px))] lg:bottom-5',
+            isAnyOverlayOpen && 'pointer-events-none select-none'
+          )}
+        >
+          {/* AI Dub Action + Stop (progress bar + ✅ inside button) */}
+          <div className="flex items-center gap-1.5">
+            {isTranslating && (
+              <button
+                type="button"
+                onClick={stopTranslation}
+                className="h-10 px-3 rounded-xl bg-red-600 text-white text-[11px] font-semibold shadow-lg flex items-center justify-center gap-1 cursor-pointer touch-tactile btn-inch-cap"
+                aria-label="Stop AI translation"
+              >
+                <Square size={12} className="shrink-0" />
+                <span className="truncate">Stop AI</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={startTranslation}
+              disabled={isTranslating || stats.total === 0}
+              className="relative overflow-hidden h-10 px-3 rounded-xl text-white text-[11px] font-semibold shadow-lg border flex items-center justify-center gap-1.5 disabled:opacity-45 cursor-pointer touch-tactile btn-inch-cap"
+              style={{
+                backgroundColor: 'var(--theme-accent)',
+                borderColor: 'rgba(255,255,255,0.2)',
+              }}
+              title={
+                isTranslating
+                  ? `AI Dubbing (${translationSpeed}/s · ${stats.progress}%)`
+                  : stats.total > 0 && stats.translated === stats.total
+                  ? 'AI Translation Completed'
+                  : stats.translated > 0
+                  ? `Resume AI Dub (${stats.progress}%)`
+                  : 'Start AI Dub'
+              }
+            >
+              {stats.total > 0 && (
+                <span
+                  aria-hidden="true"
+                  className="absolute inset-y-0 left-0 bg-white/25 transition-all duration-300"
+                  style={{ width: `${stats.progress}%` }}
+                />
+              )}
+              <span className="relative z-10 flex items-center gap-1.5 truncate tabular-nums">
+                {isTranslating ? (
+                  <Loader2 size={13} className="animate-spin shrink-0" />
+                ) : stats.total > 0 && stats.translated === stats.total ? (
+                  <span aria-label="Completed" className="text-[11px] leading-none">✅</span>
+                ) : (
+                  <Sparkles size={13} className="shrink-0" />
+                )}
+                <span className="truncate">
+                  {isTranslating
+                    ? `AI ${stats.progress}%`
+                    : stats.total > 0 && stats.translated === stats.total
+                    ? 'AI Done'
+                    : stats.translated > 0
+                    ? `AI ${stats.progress}%`
+                    : 'AI Dub'}
+                </span>
+              </span>
+            </button>
+          </div>
+
+          {/* Neutral / Google Translate Action + Stop (progress bar + ✅ inside button) */}
+          <div className="flex items-center gap-1.5">
+            {isGoogleTranslatingAll && (
+              <button
+                type="button"
+                onClick={stopGoogleTranslate}
+                className="h-10 px-3 rounded-xl bg-red-600 text-white text-[11px] font-semibold shadow-lg flex items-center justify-center gap-1 cursor-pointer touch-tactile btn-inch-cap"
+                aria-label="Stop Google translation"
+              >
+                <Square size={12} className="shrink-0" />
+                <span className="truncate">Stop N</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={translateAllGoogle}
+              disabled={isGoogleTranslatingAll || stats.total === 0}
+              className="relative overflow-hidden h-10 px-3 rounded-xl border text-[11px] font-semibold shadow-lg flex items-center justify-center gap-1.5 disabled:opacity-45 cursor-pointer touch-tactile btn-inch-cap"
+              style={{
+                backgroundColor: 'var(--theme-surface)',
+                borderColor: 'var(--theme-border)',
+                color: 'var(--theme-text)',
+              }}
+              title={
+                isGoogleTranslatingAll
+                  ? `Neutral Translating (${stats.googleProgress}%)`
+                  : stats.total > 0 && stats.google === stats.total
+                  ? 'Neutral / Google Translation Completed'
+                  : 'Run Neutral / Google Translate'
+              }
+            >
+              {stats.total > 0 && (
+                <span
+                  aria-hidden="true"
+                  className="absolute inset-y-0 left-0 opacity-20 transition-all duration-300"
+                  style={{ width: `${stats.googleProgress}%`, backgroundColor: 'var(--theme-accent)' }}
+                />
+              )}
+              <span className="relative z-10 flex items-center gap-1.5 truncate tabular-nums">
+                {isGoogleTranslatingAll ? (
+                  <Loader2 size={13} className="animate-spin shrink-0" />
+                ) : stats.total > 0 && stats.google === stats.total ? (
+                  <span aria-label="Completed" className="text-[11px] leading-none">✅</span>
+                ) : (
+                  <Languages size={13} style={{ color: 'var(--theme-accent)' }} className="shrink-0" />
+                )}
+                <span className="truncate">
+                  {isGoogleTranslatingAll
+                    ? `Neutral ${stats.googleProgress}%`
+                    : stats.total > 0 && stats.google === stats.total
+                    ? 'Neutral Done'
+                    : stats.google > 0
+                    ? `Neutral ${stats.googleProgress}%`
+                    : 'Neutral'}
+                </span>
+              </span>
+            </button>
+          </div>
+
+          {/* Translator Drawer % Progress Trigger */}
+          <button
+            type="button"
+            onClick={() => setIsTranslatorDrawerOpen(true)}
+            className="h-11 min-w-[46px] px-3.5 rounded-2xl border shadow-lg flex items-center justify-center gap-1.5 cursor-pointer touch-tactile btn-inch-cap"
+            style={{
+              backgroundColor: 'var(--theme-accent)',
+              borderColor: 'rgba(255,255,255,0.18)',
+              color: '#ffffff',
+            }}
+            title="Open Translation Progress & Parameters Drawer (or swipe left from right edge)"
+            aria-label="Open Translation Progress & Parameters Drawer"
+          >
+            {isTranslating || isGoogleTranslatingAll ? (
+              <Loader2 size={15} className="animate-spin shrink-0" />
+            ) : (
+              <Activity size={15} className="shrink-0" />
+            )}
+            <span className="text-[11px] font-mono font-semibold leading-none tabular-nums">
+              {stats.progress}%
+            </span>
+          </button>
+        </div>
+      )}
+
+      {activeTab === 'workspace' && !isWorkspaceDrawerOpen && !isKeyboardActive && (
+        <button
+          type="button"
+          onClick={() => setIsWorkspaceDrawerOpen(true)}
+          className={cn(
+            'fixed right-3.5 sm:right-5 z-[60] h-11 min-w-[46px] px-3.5 rounded-2xl border shadow-lg flex items-center justify-center gap-1.5 cursor-pointer touch-tactile transition-[bottom] duration-200 btn-inch-cap',
+            showWorkspacePinnedFooter
+              ? isBottomNavVisible
+                ? 'bottom-[calc(108px+max(env(safe-area-inset-bottom,0px),6px))] lg:bottom-[58px]'
+                : 'bottom-[calc(58px+max(env(safe-area-inset-bottom,0px),6px))] lg:bottom-[58px]'
+              : isBottomNavVisible
+              ? 'bottom-[calc(54px+max(env(safe-area-inset-bottom,0px),6px))] lg:bottom-5'
+              : 'bottom-[calc(14px+max(env(safe-area-inset-bottom,0px),6px))] lg:bottom-5',
+            isAnyOverlayOpen && 'pointer-events-none select-none'
+          )}
+          style={{
+            backgroundColor: 'var(--theme-accent)',
+            borderColor: 'rgba(255,255,255,0.18)',
+            color: '#ffffff',
+          }}
+          title="Open Workspace Tools Drawer (or swipe left from right edge)"
+          aria-label="Open Workspace Tools Drawer"
+        >
+          <Sliders size={15} className="shrink-0" />
+          <span className="text-[11px] font-semibold tracking-tight leading-none truncate">Tools</span>
+          {(selectedIndices.size > 0 || searchTerm || qcFilter !== 'all') && (
+            <span className="w-1.5 h-1.5 rounded-full bg-white/95 shrink-0" />
+          )}
+        </button>
+      )}
+
+      {activeTab === 'styling' && !isStylingDrawerOpen && !isKeyboardActive && (
+        <button
+          type="button"
+          onClick={() => setIsStylingDrawerOpen(true)}
+          className={cn(
+            'fixed right-3.5 sm:right-5 z-[60] h-11 min-w-[46px] px-3.5 rounded-2xl border shadow-lg flex items-center justify-center gap-1.5 cursor-pointer touch-tactile transition-[bottom] duration-200 btn-inch-cap',
+            isBottomNavVisible
+              ? 'bottom-[calc(54px+max(env(safe-area-inset-bottom,0px),6px))] lg:bottom-5'
+              : 'bottom-[calc(14px+max(env(safe-area-inset-bottom,0px),6px))] lg:bottom-5',
+            isAnyOverlayOpen && 'pointer-events-none select-none'
+          )}
+          style={{
+            backgroundColor: 'var(--theme-accent)',
+            borderColor: 'rgba(255,255,255,0.18)',
+            color: '#ffffff',
+          }}
+          title="Open Gradient Studio Drawer (or swipe left from right edge)"
+          aria-label="Open Gradient Studio Drawer"
+        >
+          <Palette size={15} className="shrink-0" />
+          <span className="text-[11px] font-semibold tracking-tight leading-none truncate">Gradient</span>
+        </button>
+      )}
+
+      {/* Home Tab Exclusive Right-Side Drawer (My Subtitles Folder) */}
+      <MySubtitlesDrawer
+        isOpen={activeTab === 'home' && isHomeDrawerOpen}
+        onClose={() => setIsHomeDrawerOpen(false)}
+        onLoadFile={processSubtitleFile}
+        onNotify={addNotification}
+      />
+
+      {/* Translator Tab Exclusive Right-Side Drawer (Progress & Parameters) */}
+      <TranslatorDrawer
+        isOpen={activeTab === 'translator' && isTranslatorDrawerOpen}
+        onClose={() => setIsTranslatorDrawerOpen(false)}
+        subtitlesCount={stats.total}
+        translatedCount={stats.translated}
+        googleCount={stats.google}
+        isTranslating={isTranslating}
+        isGoogleTranslatingAll={isGoogleTranslatingAll}
+        translationSpeed={translationSpeed}
+        selectedModel={selectedModel}
+        onUpdateModel={(newModel) => {
+          setSelectedModel(newModel);
+          updateGeminiConfig(newModel);
+        }}
+        geminiWorkers={geminiWorkers}
+        onUpdateGeminiWorkers={setGeminiWorkers}
+        geminiBatchSize={geminiBatchSize}
+        onUpdateGeminiBatchSize={setGeminiBatchSize}
+        geminiDelay={geminiDelay}
+        onUpdateGeminiDelay={setGeminiDelay}
+        googleWorkers={googleWorkers}
+        onUpdateGoogleWorkers={setGoogleWorkers}
+        googleBatchSize={googleBatchSize}
+        onUpdateGoogleBatchSize={setGoogleBatchSize}
+        adaptiveScalingEnabled={adaptiveScalingEnabled}
+        onToggleAdaptiveScaling={setAdaptiveScalingEnabled}
+        activeAdaptiveInfo={activeAdaptiveInfo}
+        workerStates={workerStates}
+        translationSettings={translationSettings}
+        onUpdateTranslationSettings={setTranslationSettings}
+        onStartTranslation={startTranslation}
+        onStopTranslation={stopTranslation}
+        onStartGoogleTranslate={translateAllGoogle}
+        onStopGoogleTranslate={stopGoogleTranslate}
+        onOpenFullSettings={() => {
+          setFocusedSettingsCategory('translation');
+          setFocusedTranslationSub('language');
+          setActiveTab('menu');
+        }}
+      />
+
+      {/* Workspace Tab Exclusive Right-Side Drawer (All Workspace Tools & Utilities) */}
+      <WorkspaceDrawer
+        isOpen={activeTab === 'workspace' && isWorkspaceDrawerOpen}
+        onClose={() => setIsWorkspaceDrawerOpen(false)}
+        searchInput={searchInput}
+        onChangeSearch={setSearchInput}
+        isReadOnly={isReadOnly}
+        onToggleReadOnly={() => {
+          const next = !isReadOnly;
+          setIsReadOnly(next);
+          addNotification(next ? 'Locked' : 'Unlocked', 'success');
+          addLog(next ? 'Locked workspace.' : 'Unlocked workspace editing.', 'info');
+        }}
+        canUndo={historyIndex > 0}
+        canRedo={historyIndex < history.length - 1}
+        historyIndex={historyIndex}
+        historyLength={history.length}
+        onUndo={handleUndo}
+        onRedo={handleRedo}
+        filteredCount={filteredSubtitles.length}
+        selectedCount={selectedIndices.size}
+        untranslatedCount={Math.max(0, stats.total - stats.translated)}
+        onToggleSelectAll={toggleSelectAll}
+        onSelectUntranslated={selectUntranslated}
+        onClearSelection={() => setSelectedIndices(new Set())}
+        onOpenEditor={() => handleOpenEditor()}
+        onRetrySelectedAI={retrySelectedAI}
+        onRetrySelectedGoogle={retrySelectedGoogle}
+        onRetrySelectedBoth={retrySelectedBoth}
+        onClearSelectedAI={confirmClearSelectedAI}
+        onClearSelectedGoogle={confirmClearSelectedGoogle}
+        onClearSelectedBoth={confirmClearSelectedBoth}
+        onDeleteSelected={confirmDeleteSelectedSubtitles}
+        isTranslating={isTranslating}
+        isGoogleTranslatingAll={isGoogleTranslatingAll}
+        onOpenFindReplace={() => setIsFindReplaceOpen(true)}
+        onOpenTextCleanup={() => setIsTextCleanupOpen(true)}
+        onSplitAllLong={handleSplitAllLong}
+        onOpenWatermark={() => setIsWatermarkModalOpen(true)}
+        onAddSegment={() => handleInsertSubtitle()}
+        onOpenTimeShift={() => setIsTimeShiftOpen(true)}
+        onOpenGapTiming={() => setIsGapTimingOpen(true)}
+        onResetTimings={confirmResetTimings}
+        onResetBaseline={confirmResetBaseline}
+        onRefreshTable={() => setSubtitles([...subtitles])}
+        viewMode={preferences.mobileSubtitleView}
+        onChangeViewMode={(mode) =>
+          updatePreferences((prev) => ({ ...prev, mobileSubtitleView: mode }))
+        }
+        visibleColumns={visibleColumns}
+        onChangeVisibleColumns={setVisibleColumns}
+        onOpenTextResize={() => {
+          setDraftOriginalFontSize(originalFontSize);
+          setDraftTranslatedFontSize(translatedFontSize);
+          setDraftGoogleFontSize(googleFontSize);
+          setDraftGlobalFontSize(globalFontSize);
+          setIsTextResizeOpen(true);
+          setIsFontsOpen(false);
+        }}
+        onOpenFonts={() => {
+          setDraftOriginalFont(originalFont);
+          setDraftUrduFont(urduFont);
+          setDraftGoogleFont(googleFont);
+          setDraftGlobalFont(globalFont);
+          setDraftIsGlobalFontActive(isGlobalFontActive);
+          setDraftFontTarget(fontTarget);
+          setIsFontsOpen(true);
+          setIsTextResizeOpen(false);
+        }}
+        onOpenLanguageSettings={() => {
+          setFocusedSettingsCategory('translation');
+          setFocusedTranslationSub('language');
+          setActiveTab('menu');
+        }}
+        scriptBadge={SCRIPT_MODES.find((s) => s.id === translationSettings.scriptMode)?.badge || 'اردو'}
+        aiProgress={stats.progress}
+        googleProgress={stats.googleProgress}
+        onToggleWorkerMonitor={() => setIsWorkerMonitorOpen((prev) => !prev)}
+        enableQcInspector={preferences.optionalFeatures.enableQcInspector}
+        qcFilter={qcFilter}
+        onChangeQcFilter={(next) => {
+          setQcFilter(next);
+          setCurrentPage(1);
+        }}
+        qcCounts={{
+          total: subtitles.length,
+          totalIssues: qcAnalysis.totalIssues,
+          highCpsCount: qcAnalysis.highCpsCount,
+          overlapCount: qcAnalysis.overlapCount,
+          untranslatedCount: qcAnalysis.untranslatedCount,
+        }}
+      />
+
+      {/* Clutter-Free Text Resize Popup */}
+      <TextResizePopupModal
+        isOpen={isTextResizeOpen}
+        onClose={handleCancelTextResize}
+        onApply={handleApplyTextResize}
+        onResetDraft={() => {
+          setDraftOriginalFontSize(originalFontSize);
+          setDraftTranslatedFontSize(translatedFontSize);
+          setDraftGoogleFontSize(googleFontSize);
+          setDraftGlobalFontSize(globalFontSize);
+        }}
+        isDirty={
+          draftOriginalFontSize !== originalFontSize ||
+          draftTranslatedFontSize !== translatedFontSize ||
+          draftGoogleFontSize !== googleFontSize ||
+          draftGlobalFontSize !== globalFontSize
+        }
+        draftOriginalFontSize={draftOriginalFontSize}
+        draftTranslatedFontSize={draftTranslatedFontSize}
+        draftGoogleFontSize={draftGoogleFontSize}
+        draftGlobalFontSize={draftGlobalFontSize}
+        onChangeOriginalFontSize={setDraftOriginalFontSize}
+        onChangeTranslatedFontSize={setDraftTranslatedFontSize}
+        onChangeGoogleFontSize={setDraftGoogleFontSize}
+        onChangeGlobalFontSize={setDraftGlobalFontSize}
+        onSyncAllSizes={(val) => {
+          setDraftGlobalFontSize(val);
+          setDraftOriginalFontSize(val);
+          setDraftTranslatedFontSize(val);
+          setDraftGoogleFontSize(val);
+        }}
+        previewDisplayMode={previewDisplayMode}
+        onTogglePreviewDisplayMode={() =>
+          setPreviewDisplayMode((m) => (m === 'rendered' ? 'plain' : 'rendered'))
+        }
+        activeOriginalFont={isGlobalFontActive ? globalFont : originalFont}
+        activeAiFont={isGlobalFontActive ? globalFont : urduFont}
+        activeGoogleFont={isGlobalFontActive ? globalFont : googleFont}
+        previewSource={previewSource}
+        previewAi={previewAi}
+        previewGoogle={previewGoogle}
+      />
+
+      {/* Clutter-Free Fonts Picker Popup */}
+      <FontsPopupModal
+        isOpen={isFontsOpen}
+        onClose={handleCancelFonts}
+        onApply={handleApplyFonts}
+        onResetDraft={() => {
+          setDraftOriginalFont(originalFont);
+          setDraftUrduFont(urduFont);
+          setDraftGoogleFont(googleFont);
+          setDraftGlobalFont(globalFont);
+          setDraftIsGlobalFontActive(isGlobalFontActive);
+          setDraftFontTarget(fontTarget);
+        }}
+        isDirty={
+          draftOriginalFont !== originalFont ||
+          draftUrduFont !== urduFont ||
+          draftGoogleFont !== googleFont ||
+          draftGlobalFont !== globalFont ||
+          draftIsGlobalFontActive !== isGlobalFontActive ||
+          draftFontTarget !== fontTarget
+        }
+        draftFontTarget={draftFontTarget}
+        onChangeDraftFontTarget={setDraftFontTarget}
+        fontsActiveTab={fontsActiveTab}
+        onChangeFontsActiveTab={setFontsActiveTab}
+        draftOriginalFont={draftOriginalFont}
+        draftUrduFont={draftUrduFont}
+        draftGoogleFont={draftGoogleFont}
+        draftGlobalFont={draftGlobalFont}
+        draftIsGlobalFontActive={draftIsGlobalFontActive}
+        onSelectFont={applyFontSelectionDraft}
+        localFonts={localFonts}
+        customFontInputName={customFontInputName}
+        onChangeCustomFontInputName={setCustomFontInputName}
+        onAddNamedFont={handleAddNamedFont}
+        onUploadFontFile={handleUploadFontFile}
+        onDeleteLocalFont={handleDeleteLocalFont}
+        isUploadingFont={isUploadingFont}
+        previewSource={previewSource}
+        previewAi={previewAi}
+        previewGoogle={previewGoogle}
+      />
+
+      {/* Field Long-Click Actions Popup Menu */}
+      {fieldActionMenu && (() => {
+        const targetSub = subtitles.find(s => s.index === fieldActionMenu.index);
+        if (!targetSub) return null;
+        const fieldText =
+          fieldActionMenu.field === 'orig'
+            ? targetSub.text
+            : fieldActionMenu.field === 'ai'
+            ? targetSub.translatedText || ''
+            : targetSub.googleTranslateText || '';
+        const fieldLabel =
+          fieldActionMenu.field === 'orig'
+            ? 'Original'
+            : fieldActionMenu.field === 'ai'
+            ? 'AI Translation'
+            : 'Neutral / Google';
+        const menuStyle = getClampedPopoverStyle({ left: fieldActionMenu.x, top: fieldActionMenu.y }, 224, 340);
+        return (
+          <div
+            className="fixed inset-0 z-[240]"
+            onClick={() => setFieldActionMenu(null)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setFieldActionMenu(null);
+            }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="fixed z-[245] w-[224px] rounded-xl border shadow-2xl p-1.5 space-y-0.5 text-[11px]"
+              style={{
+                ...menuStyle,
+                backgroundColor: 'var(--theme-surface)',
+                borderColor: 'var(--theme-border)',
+                color: 'var(--theme-text)',
+              }}
+            >
+              <div className="px-2 py-1 text-[9.5px] font-bold uppercase tracking-wider opacity-60 border-b mb-1 flex items-center justify-between" style={{ borderColor: 'var(--theme-border)' }}>
+                <span>Block #{targetSub.index} · {fieldLabel}</span>
+              </div>
+              {!isReadOnly && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const m = fieldActionMenu;
+                    setFieldActionMenu(null);
+                    setEditTriggerTarget({ index: m.index, field: m.field, nonce: Date.now() });
+                  }}
+                  className="w-full px-2.5 py-1.5 rounded-lg text-left font-medium flex items-center gap-2 hover:bg-white/10 cursor-pointer"
+                >
+                  <Edit3 size={12} style={{ color: 'var(--theme-accent)' }} />
+                  <span>Inline Edit</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  const m = fieldActionMenu;
+                  setFieldActionMenu(null);
+                  handleOpenEditor(m.index, m.field);
+                }}
+                className="w-full px-2.5 py-1.5 rounded-lg text-left font-medium flex items-center gap-2 hover:bg-white/10 cursor-pointer"
+              >
+                <Maximize2 size={12} style={{ color: 'var(--theme-accent)' }} />
+                <span>Edit in Studio</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard?.writeText(stripFormatting(fieldText));
+                  addNotification(`Copied ${fieldLabel} #${targetSub.index}`, 'success');
+                  setFieldActionMenu(null);
+                }}
+                className="w-full px-2.5 py-1.5 rounded-lg text-left font-medium flex items-center gap-2 hover:bg-white/10 cursor-pointer"
+              >
+                <Copy size={12} />
+                <span>Copy</span>
+              </button>
+              {!isReadOnly && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const m = fieldActionMenu;
+                    setFieldActionMenu(null);
+                    try {
+                      const clip = await navigator.clipboard.readText();
+                      if (clip === undefined || clip === null) return;
+                      if (m.field === 'orig') handleManualEditOriginal(m.index, clip);
+                      else if (m.field === 'ai') handleManualEdit(m.index, clip);
+                      else handleManualEditGoogle(m.index, clip);
+                      addNotification(`Pasted into ${fieldLabel} #${m.index}`, 'success');
+                    } catch {
+                      addNotification('Clipboard paste permission denied by browser', 'error');
+                    }
+                  }}
+                  className="w-full px-2.5 py-1.5 rounded-lg text-left font-medium flex items-center gap-2 hover:bg-white/10 cursor-pointer"
+                >
+                  <ClipboardPaste size={12} />
+                  <span>Paste</span>
+                </button>
+              )}
+              {!isReadOnly && fieldText && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const m = fieldActionMenu;
+                    navigator.clipboard?.writeText(stripFormatting(fieldText));
+                    setFieldActionMenu(null);
+                    if (m.field === 'orig') handleManualEditOriginal(m.index, '');
+                    else if (m.field === 'ai') handleManualEdit(m.index, '');
+                    else handleManualEditGoogle(m.index, '');
+                    addNotification(`Cut ${fieldLabel} #${m.index}`, 'success');
+                  }}
+                  className="w-full px-2.5 py-1.5 rounded-lg text-left font-medium flex items-center gap-2 hover:bg-white/10 cursor-pointer"
+                >
+                  <Scissors size={12} />
+                  <span>Cut</span>
+                </button>
+              )}
+              {(fieldActionMenu.field === 'orig' || fieldActionMenu.field === 'google') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const idx = fieldActionMenu.index;
+                    setFieldActionMenu(null);
+                    translateSingleRowGoogle(idx);
+                  }}
+                  className="w-full px-2.5 py-1.5 rounded-lg text-left font-medium flex items-center gap-2 hover:bg-white/10 cursor-pointer"
+                >
+                  <Languages size={12} style={{ color: 'var(--theme-accent)' }} />
+                  <span>Neutral Translate</span>
+                </button>
+              )}
+              {!isReadOnly && targetSub.googleTranslateText && fieldActionMenu.field !== 'orig' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const idx = fieldActionMenu.index;
+                    setFieldActionMenu(null);
+                    applyGoogleToAI(idx);
+                  }}
+                  className="w-full px-2.5 py-1.5 rounded-lg text-left font-medium flex items-center gap-2 hover:bg-white/10 cursor-pointer"
+                >
+                  <Sparkles size={12} style={{ color: 'var(--theme-accent)' }} />
+                  <span>Use Neutral as AI</span>
+                </button>
+              )}
+              {!isReadOnly && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const idx = fieldActionMenu.index;
+                    setFieldActionMenu(null);
+                    handleSplitSubtitle(idx);
+                  }}
+                  className="w-full px-2.5 py-1.5 rounded-lg text-left font-medium flex items-center gap-2 hover:bg-white/10 cursor-pointer"
+                >
+                  <Scissors size={12} />
+                  <span>Split Block</span>
+                </button>
+              )}
+              {(canUndoBlock(targetSub.index) || canRedoBlock(targetSub.index)) && (
+                <div className="flex items-center gap-1 pt-1 border-t" style={{ borderColor: 'var(--theme-border)' }}>
+                  <button
+                    type="button"
+                    disabled={!canUndoBlock(targetSub.index)}
+                    onClick={() => {
+                      const idx = targetSub.index;
+                      setFieldActionMenu(null);
+                      handleUndoBlock(idx);
+                    }}
+                    className="flex-1 px-2 py-1 rounded-lg border text-[10.5px] font-semibold flex items-center justify-center gap-1 disabled:opacity-35 cursor-pointer"
+                    style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+                  >
+                    <Undo2 size={11} />
+                    <span>Undo</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!canRedoBlock(targetSub.index)}
+                    onClick={() => {
+                      const idx = targetSub.index;
+                      setFieldActionMenu(null);
+                      handleRedoBlock(idx);
+                    }}
+                    className="flex-1 px-2 py-1 rounded-lg border text-[10.5px] font-semibold flex items-center justify-center gap-1 disabled:opacity-35 cursor-pointer"
+                    style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+                  >
+                    <Redo2 size={11} />
+                    <span>Redo</span>
+                  </button>
+                </div>
+              )}
+              {!isReadOnly && fieldText && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const m = fieldActionMenu;
+                    setFieldActionMenu(null);
+                    confirmClearSingleField(m.index, m.field);
+                  }}
+                  className="w-full px-2.5 py-1.5 rounded-lg text-left font-medium flex items-center gap-2 text-red-400 hover:bg-red-500/15 cursor-pointer"
+                >
+                  <Trash2 size={12} />
+                  <span>Clear Field</span>
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Column Stream Undo/Redo Popup Menu (long-press anywhere in column) */}
+      {columnHistoryMenu && (() => {
+        const label =
+          columnHistoryMenu.field === 'orig'
+            ? 'Original Stream'
+            : columnHistoryMenu.field === 'ai'
+            ? 'AI Translation Stream'
+            : 'Neutral / Google Stream';
+        const menuStyle = getClampedPopoverStyle({ left: columnHistoryMenu.x, top: columnHistoryMenu.y }, 224, 170);
+        return (
+          <div
+            className="fixed inset-0 z-[240]"
+            onClick={() => setColumnHistoryMenu(null)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setColumnHistoryMenu(null);
+            }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="fixed z-[245] w-[224px] rounded-xl border shadow-2xl p-2 space-y-1.5 text-[11px]"
+              style={{
+                ...menuStyle,
+                backgroundColor: 'var(--theme-surface)',
+                borderColor: 'var(--theme-border)',
+                color: 'var(--theme-text)',
+              }}
+            >
+              <div className="px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wider opacity-65 border-b" style={{ borderColor: 'var(--theme-border)' }}>
+                {label}
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={!canUndoStream(columnHistoryMenu.field)}
+                  onClick={() => {
+                    const f = columnHistoryMenu.field;
+                    setColumnHistoryMenu(null);
+                    handleUndoStream(f);
+                  }}
+                  className="flex-1 px-2 py-1.5 rounded-lg border font-semibold flex items-center justify-center gap-1 disabled:opacity-35 cursor-pointer"
+                  style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+                >
+                  <Undo2 size={12} className="text-amber-500" />
+                  <span>Undo</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={!canRedoStream(columnHistoryMenu.field)}
+                  onClick={() => {
+                    const f = columnHistoryMenu.field;
+                    setColumnHistoryMenu(null);
+                    handleRedoStream(f);
+                  }}
+                  className="flex-1 px-2 py-1.5 rounded-lg border font-semibold flex items-center justify-center gap-1 disabled:opacity-35 cursor-pointer"
+                  style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+                >
+                  <Redo2 size={12} className="text-emerald-500" />
+                  <span>Redo</span>
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  const f = columnHistoryMenu.field;
+                  setColumnHistoryMenu(null);
+                  handleOpenEditor(undefined, f);
+                }}
+                className="w-full px-2.5 py-1.5 rounded-lg border font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
+                style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)', color: 'var(--theme-accent)' }}
+              >
+                <Edit3 size={12} />
+                <span>Open Stream in Studio</span>
+              </button>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Shared Yes / No Confirmation Dialog for Critical Workspace Actions */}
+      <ConfirmDialogModal
+        isOpen={Boolean(confirmDialog)}
+        title={confirmDialog?.title || 'Confirm Action'}
+        message={confirmDialog?.message || ''}
+        confirmLabel={confirmDialog?.confirmLabel || 'Yes'}
+        cancelLabel={confirmDialog?.cancelLabel || 'No'}
+        danger={confirmDialog?.danger}
+        onConfirm={() => confirmDialog?.onConfirm()}
+        onCancel={() => setConfirmDialog(null)}
+      />
+
+      {/* Chrome-Android On-Screen UI Zoom & Container Spacing Sliders Bar */}
+      <OnScreenSlidersBar
+        isOpen={isOnScreenSlidersOpen}
+        onClose={() => setIsOnScreenSlidersOpen(false)}
+        uiZoom={preferences.uiZoom}
+        containerPaddingPx={preferences.containerPaddingPx}
+        onChangeZoom={(zoom) => updatePreferences((prev) => ({ ...prev, uiZoom: zoom }))}
+        onChangeContainerPadding={(px) =>
+          updatePreferences((prev) => ({
+            ...prev,
+            containerPaddingPx: px,
+            containerSize: paddingToContainerSize(px),
+          }))
+        }
       />
 
       <style dangerouslySetInnerHTML={{ __html: `

@@ -44,6 +44,7 @@ import {
   generateCleanSRT
 } from '../utils/subtitleFormatter';
 import { SubtitleItem } from '../utils/srtParser';
+import { RightEdgeDrawerShell } from './RightEdgeDrawerShell';
 import { cn } from '../utils/cn';
 
 export interface GradientStop {
@@ -395,8 +396,28 @@ export const StylingStudioDrawer: React.FC<StylingStudioDrawerProps> = ({
   onAddLog,
   onAddNotification
 }) => {
-  // Navigation tabs: 'gradients' | 'custom-builder' | 'solid-colors' | 'library'
-  const [activeTab, setActiveTab] = useState<'gradients' | 'custom-builder' | 'solid-colors' | 'library'>('gradients');
+  // Collapsible drop-down menu sections inside the right-edge Gradient Studio drawer
+  const [openMenus, setOpenMenus] = useState<{
+    preview: boolean;
+    streams: boolean;
+    modes: boolean;
+    palettes: boolean;
+    builder: boolean;
+    solid: boolean;
+    library: boolean;
+  }>({
+    preview: true,
+    streams: true,
+    modes: false,
+    palettes: true,
+    builder: false,
+    solid: false,
+    library: false,
+  });
+
+  const toggleMenuSection = (key: keyof typeof openMenus) => {
+    setOpenMenus((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
 
   // Isolated local draft configuration (changes stay on preview screen until applied)
   const [draftConfig, setDraftConfig] = useState<ActiveStylingConfig>(activeStylingConfig || DEFAULT_STYLING_CONFIG);
@@ -976,1243 +997,863 @@ export const StylingStudioDrawer: React.FC<StylingStudioDrawerProps> = ({
     );
   }, [savedPalettes, librarySearch]);
 
-  return (
-    <>
-      {/* Backdrop */}
-      {isOpen && (
-        <div 
-          onClick={onClose}
-          className="fixed inset-0 z-[120] bg-black/40 backdrop-blur-2xs transition-opacity duration-300"
-        />
-      )}
-
-      {/* Slide-over Drawer from Right Edge */}
-      <div 
-        className={cn(
-          "fixed top-0 bottom-0 right-0 z-[130] w-full max-w-xl sm:max-w-2xl lg:max-w-3xl bg-white dark:bg-zinc-900 border-l border-zinc-200 dark:border-zinc-800 shadow-2xl flex flex-col transition-transform duration-300 ease-in-out text-xs",
-          isOpen ? "translate-x-0" : "translate-x-full"
-        )}
+  const DropdownMenuSection = ({
+    id,
+    title,
+    summary,
+    icon: Icon,
+    children,
+  }: {
+    id: keyof typeof openMenus;
+    title: string;
+    summary?: string;
+    icon: React.ComponentType<{ size?: number; style?: React.CSSProperties; className?: string }>;
+    children: React.ReactNode;
+  }) => {
+    const expanded = openMenus[id];
+    return (
+      <div
+        className="rounded-xl border overflow-hidden"
+        style={{
+          backgroundColor: 'var(--theme-elevated)',
+          borderColor: expanded ? 'var(--theme-accent)' : 'var(--theme-border)',
+        }}
       >
-        {/* Header */}
-        <div className="p-3.5 sm:p-4 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-xl bg-gradient-to-tr from-amber-500 via-rose-500 to-indigo-500 text-white shadow-xs shrink-0">
-              <Palette size={18} />
-            </div>
-            <div>
-              <h2 className="font-bold text-zinc-900 dark:text-zinc-100 text-sm sm:text-base flex items-center gap-2">
-                <span>Subtitle Styling Studio</span>
-                <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-mono border border-emerald-500/20">
-                  Gradients & Colors
-                </span>
-              </h2>
-              <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
-                12 Gradient Modes • Multi-Step Picker • Doubled Wheels • Saved Library
-              </p>
+        <button
+          type="button"
+          onClick={() => toggleMenuSection(id)}
+          aria-expanded={expanded}
+          className="w-full min-h-[42px] px-3 py-2 flex items-center justify-between gap-2 text-left cursor-pointer hover:opacity-95"
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <Icon size={14} style={{ color: 'var(--theme-accent)' }} className="shrink-0" />
+            <div className="min-w-0">
+              <div className="text-[11px] font-semibold truncate">{title}</div>
+              {summary && <div className="text-[9.5px] opacity-60 truncate">{summary}</div>}
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <ChevronDown
+            size={14}
+            className={cn('shrink-0 opacity-65 transition-transform duration-150', expanded && 'rotate-180')}
+          />
+        </button>
+
+        {expanded && (
+          <div
+            className="p-2.5 border-t space-y-2.5"
+            style={{
+              backgroundColor: 'var(--theme-surface)',
+              borderColor: 'var(--theme-border)',
+            }}
+            data-no-drawer-swipe="true"
+          >
+            {children}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <>
+      <RightEdgeDrawerShell isOpen={isOpen} onClose={onClose} widthClass="w-[min(94vw,430px)]">
+        {/* Drawer Header */}
+        <div
+          className="px-3.5 py-2.5 border-b flex items-center justify-between gap-2 shrink-0"
+          style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <Palette size={15} style={{ color: 'var(--theme-accent)' }} />
+            <h2 className="font-semibold text-sm truncate">Gradient Studio</h2>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
             <button
               type="button"
               onClick={handleApplyToSubtitles}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition-colors cursor-pointer"
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-white font-semibold text-xs cursor-pointer btn-inch-cap"
+              style={{ backgroundColor: 'var(--theme-accent)' }}
             >
               <Sparkles size={12} />
-              <span>Apply to Subtitles</span>
+              <span>Apply</span>
             </button>
-            <button 
+            <button
               type="button"
               onClick={onClose}
-              className="p-2 rounded-xl text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
+              className="p-1.5 rounded-lg opacity-65 hover:opacity-100 cursor-pointer"
+              aria-label="Close Gradient Studio"
             >
-              <X size={18} />
+              <X size={16} />
             </button>
           </div>
         </div>
 
-        {/* IN-DRAWER LIVE CINEMA PREVIEW SCREEN */}
-        <div className="p-3.5 bg-black border-b border-zinc-800 text-white space-y-2 shrink-0">
-          <div className="flex items-center justify-between text-zinc-400 text-[10px]">
-            <div className="flex items-center gap-2">
-              <span className="font-bold uppercase tracking-wider text-zinc-200 flex items-center gap-1.5">
-                <Eye size={12} className="text-emerald-400" />
-                <span>Live Studio Preview</span>
-              </span>
-              <span className="text-[8.5px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                {config.customColors ? 'Custom Multi-Step Palette' : selectedPalette.name} ({config.gradientMode})
-              </span>
-            </div>
-
-            {/* Video Backdrop Switcher */}
-            <div className="flex items-center gap-2 text-[8.5px] font-bold">
-              {/* Stream Visibility Checklist */}
-              <div className="hidden sm:flex items-center gap-1.5 bg-zinc-900 px-2 py-0.5 rounded-md border border-zinc-800">
+        {/* Scrollable Drop-Down Menus inside Right-Edge Drawer */}
+        <div className="flex-1 overflow-y-auto overscroll-contain p-3 space-y-2.5 text-xs">
+          {/* Drop-Down 1: Live Cinema Preview */}
+          <DropdownMenuSection
+            id="preview"
+            title="Live Studio Preview"
+            summary={config.customColors ? 'Custom Palette' : `${selectedPalette.name} · ${config.gradientMode}`}
+            icon={Eye}
+          >
+            <div className="flex items-center justify-between gap-1.5 flex-wrap text-[10px]">
+              <div className="flex items-center gap-1.5 flex-wrap">
                 <label className="flex items-center gap-1 cursor-pointer">
-                  <input 
-                    type="checkbox" 
-                    checked={previewStreams.original} 
-                    onChange={e => setPreviewStreams(prev => ({ ...prev, original: e.target.checked }))}
-                    className="accent-amber-500 rounded w-2.5 h-2.5" 
+                  <input
+                    type="checkbox"
+                    checked={previewStreams.original}
+                    onChange={(e) => setPreviewStreams((prev) => ({ ...prev, original: e.target.checked }))}
+                    className="rounded w-3 h-3"
                   />
-                  <span className="text-zinc-300">Orig</span>
+                  <span>Orig</span>
                 </label>
                 <label className="flex items-center gap-1 cursor-pointer">
-                  <input 
-                    type="checkbox" 
-                    checked={previewStreams.ai} 
-                    onChange={e => setPreviewStreams(prev => ({ ...prev, ai: e.target.checked }))}
-                    className="accent-emerald-500 rounded w-2.5 h-2.5" 
+                  <input
+                    type="checkbox"
+                    checked={previewStreams.ai}
+                    onChange={(e) => setPreviewStreams((prev) => ({ ...prev, ai: e.target.checked }))}
+                    className="rounded w-3 h-3"
                   />
-                  <span className="text-zinc-300">AI</span>
+                  <span>AI</span>
                 </label>
                 <label className="flex items-center gap-1 cursor-pointer">
-                  <input 
-                    type="checkbox" 
-                    checked={previewStreams.google} 
-                    onChange={e => setPreviewStreams(prev => ({ ...prev, google: e.target.checked }))}
-                    className="accent-blue-500 rounded w-2.5 h-2.5" 
+                  <input
+                    type="checkbox"
+                    checked={previewStreams.google}
+                    onChange={(e) => setPreviewStreams((prev) => ({ ...prev, google: e.target.checked }))}
+                    className="rounded w-3 h-3"
                   />
-                  <span className="text-zinc-300">Google</span>
+                  <span>Neutral</span>
                 </label>
               </div>
 
-              <span>Backdrop:</span>
-              {(['cinema-dark', 'city-night', 'sunset', 'cyber', 'studio-light'] as const).map(b => (
-                <button
-                  key={b}
-                  type="button"
-                  onClick={() => setVideoBackdrop(b)}
-                  className={cn(
-                    "px-1.5 py-0.5 rounded uppercase transition-colors cursor-pointer",
-                    videoBackdrop === b ? "bg-white/20 text-white" : "text-zinc-500 hover:text-zinc-300"
+              <div className="flex items-center gap-1 flex-wrap">
+                {(['cinema-dark', 'city-night', 'sunset', 'cyber', 'studio-light'] as const).map((b) => (
+                  <button
+                    key={b}
+                    type="button"
+                    onClick={() => setVideoBackdrop(b)}
+                    className={cn(
+                      'px-1.5 py-0.5 rounded uppercase text-[8.5px] font-semibold cursor-pointer border',
+                      videoBackdrop === b ? 'text-white' : 'opacity-65'
+                    )}
+                    style={
+                      videoBackdrop === b
+                        ? { backgroundColor: 'var(--theme-accent)', borderColor: 'var(--theme-accent)' }
+                        : { backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }
+                    }
+                  >
+                    {b.split('-')[0]}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div
+              className={cn(
+                'p-3 rounded-xl border flex flex-col items-center justify-center min-h-[96px] text-center gap-1.5 relative overflow-hidden transition-all',
+                videoBackdrop === 'cinema-dark'
+                  ? 'bg-gradient-to-b from-zinc-950 via-zinc-900 to-black text-white border-zinc-800'
+                  : videoBackdrop === 'city-night'
+                  ? 'bg-gradient-to-b from-blue-950 via-slate-900 to-zinc-950 text-white border-zinc-800'
+                  : videoBackdrop === 'sunset'
+                  ? 'bg-gradient-to-b from-amber-950/80 via-rose-950/60 to-black text-white border-zinc-800'
+                  : videoBackdrop === 'cyber'
+                  ? 'bg-gradient-to-b from-fuchsia-950/80 via-purple-950/60 to-black text-white border-zinc-800'
+                  : 'bg-gradient-to-b from-zinc-200 via-zinc-100 to-zinc-300 text-zinc-900 border-zinc-300'
+              )}
+            >
+              {styledSampleItems.slice(0, 1).map((sample) => (
+                <div key={sample.index} className="space-y-1.5 w-full flex flex-col items-center">
+                  {previewStreams.ai && sample.translatedText && (
+                    <div
+                      className="leading-relaxed drop-shadow-md"
+                      style={{
+                        fontFamily: activeUrduFont,
+                        fontSize: `${Math.min(24, previewFontSize)}px`,
+                      }}
+                      dir="rtl"
+                      dangerouslySetInnerHTML={{ __html: sample.translatedText }}
+                    />
                   )}
-                >
-                  {b.split('-')[0]}
-                </button>
+                  {previewStreams.original && sample.text && (
+                    <div
+                      className="opacity-95 font-sans drop-shadow-sm"
+                      style={{
+                        fontFamily: activeEnglishFont,
+                        fontSize: `${Math.max(11, Math.round(previewFontSize * 0.62))}px`,
+                      }}
+                      dangerouslySetInnerHTML={{ __html: sample.text }}
+                    />
+                  )}
+                  {previewStreams.google && sample.googleTranslateText && (
+                    <div
+                      className="opacity-85 italic font-urdu drop-shadow-sm"
+                      style={{
+                        fontFamily: activeUrduFont,
+                        fontSize: `${Math.max(11, Math.round(previewFontSize * 0.58))}px`,
+                      }}
+                      dir="rtl"
+                      dangerouslySetInnerHTML={{ __html: sample.googleTranslateText }}
+                    />
+                  )}
+                </div>
               ))}
             </div>
-          </div>
+          </DropdownMenuSection>
 
-          {/* Screen simulator */}
-          <div className={cn(
-            "p-4 rounded-xl border border-zinc-800 flex flex-col items-center justify-center min-h-[110px] text-center gap-2 relative overflow-hidden transition-all duration-300 shadow-inner",
-            videoBackdrop === 'cinema-dark' ? "bg-gradient-to-b from-zinc-950 via-zinc-900 to-black" :
-            videoBackdrop === 'city-night' ? "bg-gradient-to-b from-blue-950 via-slate-900 to-zinc-950" :
-            videoBackdrop === 'sunset' ? "bg-gradient-to-b from-amber-950/60 via-rose-950/40 to-black" :
-            videoBackdrop === 'cyber' ? "bg-gradient-to-b from-fuchsia-950/60 via-purple-950/40 to-black" :
-            "bg-gradient-to-b from-zinc-300 via-zinc-200 to-zinc-400 text-zinc-900"
-          )}>
-            {styledSampleItems.slice(0, 1).map((sample) => (
-              <div key={sample.index} className="space-y-2 w-full flex flex-col items-center">
-                {/* AI Translated Preview */}
-                {previewStreams.ai && sample.translatedText && (
-                  <div 
-                    className="leading-relaxed transition-all drop-shadow-md"
-                    style={{ 
-                      fontFamily: activeUrduFont,
-                      fontSize: `${previewFontSize}px`
-                    }}
-                    dir="rtl"
-                    dangerouslySetInnerHTML={{ __html: sample.translatedText }}
-                  />
-                )}
-                {/* Original Source Preview */}
-                {previewStreams.original && sample.text && (
-                  <div 
-                    className="opacity-95 font-sans transition-all drop-shadow-sm"
-                    style={{ 
-                      fontFamily: activeEnglishFont,
-                      fontSize: `${Math.max(12, Math.round(previewFontSize * 0.65))}px`
-                    }}
-                    dangerouslySetInnerHTML={{ __html: sample.text }}
-                  />
-                )}
-                {/* Google Preview */}
-                {previewStreams.google && sample.googleTranslateText && (
-                  <div 
-                    className="opacity-85 italic font-urdu transition-all text-xs drop-shadow-sm"
-                    style={{ 
-                      fontFamily: activeUrduFont,
-                      fontSize: `${Math.max(11, Math.round(previewFontSize * 0.6))}px`
-                    }}
-                    dir="rtl"
-                    dangerouslySetInnerHTML={{ __html: sample.googleTranslateText }}
-                  />
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* TARGET STREAMS BAR */}
-        <div className="px-4 py-2 bg-zinc-100/90 dark:bg-zinc-850/90 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between gap-3 shrink-0">
-          <div className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-300">
-            <Layers size={13} className="text-emerald-500 shrink-0" />
-            <label className="text-[10px] font-bold uppercase tracking-wider">
-              Target Subtitle Streams:
-            </label>
-          </div>
-          <div className="relative flex-1 max-w-xs">
+          {/* Drop-Down 2: Target Subtitle Streams */}
+          <DropdownMenuSection
+            id="streams"
+            title="Target Subtitle Streams"
+            summary={config.targetStreams}
+            icon={Layers}
+          >
             <select
               value={config.targetStreams}
-              onChange={e => updateConfig({ targetStreams: e.target.value as TargetStreamField })}
-              className="w-full py-1.5 px-3 pr-8 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200 text-xs font-bold shadow-2xs focus:outline-none focus:border-emerald-500 cursor-pointer appearance-none"
+              onChange={(e) => updateConfig({ targetStreams: e.target.value as TargetStreamField })}
+              className="w-full min-h-[36px] py-1.5 px-2.5 rounded-lg border text-xs font-semibold cursor-pointer"
+              style={{
+                backgroundColor: 'var(--theme-elevated)',
+                borderColor: 'var(--theme-border)',
+                color: 'var(--theme-text)',
+              }}
             >
-              <option value="all">All 3 Streams (Original + AI + Google)</option>
+              <option value="all">All 3 Streams (Original + AI + Neutral)</option>
               <option value="both">Both (Original + AI Urdu)</option>
               <option value="translated">AI Translated (Urdu Only)</option>
               <option value="original">Original (Source Language Only)</option>
-              <option value="google">Google Translate Only</option>
+              <option value="google">Neutral / Google Only</option>
             </select>
-            <ChevronDown size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 pointer-events-none" />
-          </div>
-        </div>
+          </DropdownMenuSection>
 
-        {/* NAVIGATION TABS */}
-        <div className="flex items-center px-4 bg-zinc-50 dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 shrink-0 gap-1 overflow-x-auto">
-          <button
-            type="button"
-            onClick={() => setActiveTab('gradients')}
-            className={cn(
-              "py-2.5 px-3 font-bold text-xs flex items-center gap-1.5 border-b-2 transition-colors cursor-pointer shrink-0",
-              activeTab === 'gradients'
-                ? "border-emerald-500 text-emerald-600 dark:text-emerald-400"
-                : "border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
-            )}
+          {/* Drop-Down 3: Gradient Progression Modes */}
+          <DropdownMenuSection
+            id="modes"
+            title={`Progression Modes (${GRADIENT_PROGRESSION_MODES.length})`}
+            summary={GRADIENT_PROGRESSION_MODES.find((m) => m.id === config.gradientMode)?.label || config.gradientMode}
+            icon={Sliders}
           >
-            <Sliders size={13} />
-            <span>Gradients & Modes</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('custom-builder')}
-            className={cn(
-              "py-2.5 px-3 font-bold text-xs flex items-center gap-1.5 border-b-2 transition-colors cursor-pointer shrink-0",
-              activeTab === 'custom-builder'
-                ? "border-emerald-500 text-emerald-600 dark:text-emerald-400"
-                : "border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
-            )}
-          >
-            <Pipette size={13} />
-            <span>Multi-Step Palette Picker</span>
-            {config.customColors && (
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-            )}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('solid-colors')}
-            className={cn(
-              "py-2.5 px-3 font-bold text-xs flex items-center gap-1.5 border-b-2 transition-colors cursor-pointer shrink-0",
-              activeTab === 'solid-colors'
-                ? "border-emerald-500 text-emerald-600 dark:text-emerald-400"
-                : "border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
-            )}
-          >
-            <Sun size={13} />
-            <span>Solid Colors</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('library')}
-            className={cn(
-              "py-2.5 px-3 font-bold text-xs flex items-center gap-1.5 border-b-2 transition-colors cursor-pointer shrink-0 ml-auto",
-              activeTab === 'library'
-                ? "border-indigo-500 text-indigo-600 dark:text-indigo-400"
-                : "border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
-            )}
-          >
-            <Bookmark size={13} className="text-indigo-500" />
-            <span>Gradient Library</span>
-            <span className="px-1.5 py-0.2 rounded-full bg-indigo-100 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 font-mono text-[9px]">
-              {savedPalettes.length}
-            </span>
-          </button>
-        </div>
-
-        {/* Scrollable Studio Content Body */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          
-          {/* TAB 1: GRADIENTS & 12 MODES */}
-          {activeTab === 'gradients' && (
-            <div className="space-y-4">
-              {/* 12 Gradient Progression Modes Grid */}
-              <div className="p-3.5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <label className="font-bold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider text-[10px] flex items-center gap-1.5">
-                    <Sliders size={13} className="text-indigo-500" />
-                    <span>Gradient Progression Modes ({GRADIENT_PROGRESSION_MODES.length} Modes)</span>
-                  </label>
-                  <span className="text-[9px] text-zinc-400 font-mono">Select timeline algorithm</span>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-                  {GRADIENT_PROGRESSION_MODES.map(m => {
-                    const isSelected = config.gradientMode === m.id;
-                    return (
-                      <button
-                        key={m.id}
-                        type="button"
-                        onClick={() => updateConfig({ gradientMode: m.id })}
-                        className={cn(
-                          "p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-1.5 group",
-                          isSelected
-                            ? "border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-100 shadow-2xs ring-1 ring-emerald-500/30"
-                            : "border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:border-zinc-300 dark:hover:border-zinc-700"
-                        )}
-                      >
-                        <div className="flex items-center justify-between gap-1">
-                          <span className="font-bold text-[10.5px] truncate">{m.label}</span>
-                          <span className={cn(
-                            "text-[8px] font-mono px-1.5 py-0.2 rounded-full",
-                            isSelected 
-                              ? "bg-emerald-500 text-white" 
-                              : "bg-zinc-100 dark:bg-zinc-700 text-zinc-500 dark:text-zinc-400"
-                          )}>
-                            {m.tag}
-                          </span>
-                        </div>
-                        <span className="text-[8.5px] text-zinc-500 dark:text-zinc-400 leading-tight">
-                          {m.desc}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* 20 Designer Color Palettes */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <label className="font-bold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider text-[10px] flex items-center gap-1.5">
-                    <Palette size={13} className="text-rose-500" />
-                    <span>Designer Curated Palettes</span>
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab('custom-builder')}
-                      className="text-emerald-600 dark:text-emerald-400 hover:underline text-[9.5px] font-bold cursor-pointer"
+            <div className="grid grid-cols-1 gap-1.5">
+              {GRADIENT_PROGRESSION_MODES.map((m) => {
+                const isSelected = config.gradientMode === m.id;
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => updateConfig({ gradientMode: m.id })}
+                    className={cn(
+                      'p-2 rounded-lg border text-left transition-colors cursor-pointer flex items-center justify-between gap-2',
+                      isSelected && 'ring-1 ring-[var(--theme-accent)]'
+                    )}
+                    style={{
+                      backgroundColor: isSelected ? 'var(--theme-accent-soft)' : 'var(--theme-elevated)',
+                      borderColor: isSelected ? 'var(--theme-accent)' : 'var(--theme-border)',
+                    }}
+                  >
+                    <div className="min-w-0">
+                      <div className="font-semibold text-[11px] truncate">{m.label}</div>
+                      <div className="text-[9.5px] opacity-60 truncate">{m.desc}</div>
+                    </div>
+                    <span
+                      className={cn(
+                        'text-[8.5px] font-mono px-1.5 py-0.5 rounded shrink-0',
+                        isSelected ? 'text-white' : 'opacity-70 border'
+                      )}
+                      style={
+                        isSelected
+                          ? { backgroundColor: 'var(--theme-accent)' }
+                          : { borderColor: 'var(--theme-border)' }
+                      }
                     >
-                      + Open Multi-Step Picker
-                    </button>
-                    <span className="text-zinc-400 font-mono text-[9px]">{GRADIENT_PALETTES.length} Presets</span>
-                  </div>
-                </div>
+                      {m.tag}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </DropdownMenuSection>
 
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  {GRADIENT_PALETTES.map(palette => {
-                    const isSelected = !config.customColors && config.paletteId === palette.id;
-                    return (
-                      <button
-                        key={palette.id}
-                        type="button"
-                        onClick={() => {
-                          updateConfig({ 
-                            paletteId: palette.id,
-                            customColors: undefined 
-                          });
-                          const syncd = palette.colors.map((c, i) => ({
-                            id: `stop-${i}`,
-                            color: c,
-                            offset: Math.round((i / Math.max(1, palette.colors.length - 1)) * 100)
-                          }));
-                          setGradientStops(syncd);
-                          setActiveStopId(syncd[0]?.id || 'stop-0');
-                        }}
-                        className={cn(
-                          "p-2.5 rounded-xl border text-left transition-all flex flex-col gap-1.5 cursor-pointer shadow-2xs group",
-                          isSelected
-                            ? "border-emerald-500 ring-2 ring-emerald-500/30 bg-emerald-50/30 dark:bg-emerald-950/30"
-                            : "border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 bg-white dark:bg-zinc-850"
-                        )}
-                      >
-                        <div 
-                          className="h-3.5 w-full rounded-md shadow-2xs group-hover:scale-[1.02] transition-transform"
-                          style={{ background: palette.previewCss }}
-                        />
-                        <div>
-                          <div className="font-bold text-zinc-900 dark:text-zinc-100 text-[10px] truncate">
-                            {palette.name}
-                          </div>
-                          <div className="text-[8px] text-zinc-400 dark:text-zinc-500 truncate">
-                            {palette.colors.length} stops • {palette.description}
-                          </div>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
+          {/* Drop-Down 4: Designer Curated Palettes */}
+          <DropdownMenuSection
+            id="palettes"
+            title={`Curated Palettes (${GRADIENT_PALETTES.length})`}
+            summary={selectedPalette.name}
+            icon={Palette}
+          >
+            <div className="grid grid-cols-2 gap-1.5">
+              {GRADIENT_PALETTES.map((palette) => {
+                const isSelected = !config.customColors && config.paletteId === palette.id;
+                return (
+                  <button
+                    key={palette.id}
+                    type="button"
+                    onClick={() => {
+                      updateConfig({
+                        paletteId: palette.id,
+                        customColors: undefined,
+                      });
+                      const syncd = palette.colors.map((c, i) => ({
+                        id: `stop-${i}`,
+                        color: c,
+                        offset: Math.round((i / Math.max(1, palette.colors.length - 1)) * 100),
+                      }));
+                      setGradientStops(syncd);
+                      setActiveStopId(syncd[0]?.id || 'stop-0');
+                    }}
+                    className={cn(
+                      'p-2 rounded-lg border text-left transition-colors flex flex-col gap-1 cursor-pointer',
+                      isSelected && 'ring-1 ring-[var(--theme-accent)]'
+                    )}
+                    style={{
+                      backgroundColor: isSelected ? 'var(--theme-accent-soft)' : 'var(--theme-elevated)',
+                      borderColor: isSelected ? 'var(--theme-accent)' : 'var(--theme-border)',
+                    }}
+                  >
+                    <div className="h-3 w-full rounded" style={{ background: palette.previewCss }} />
+                    <div className="font-semibold text-[10px] truncate">{palette.name}</div>
+                    <div className="text-[8.5px] opacity-60 truncate">{palette.colors.length} stops</div>
+                  </button>
+                );
+              })}
+            </div>
+          </DropdownMenuSection>
+
+          {/* Drop-Down 5: Multi-Step Palette Picker */}
+          <DropdownMenuSection
+            id="builder"
+            title="Multi-Step Palette Picker"
+            summary={`${gradientStops.length} Stops · ${config.gradientDirection || '135deg'}`}
+            icon={Pipette}
+          >
+            <div className="flex items-center justify-between gap-1.5 flex-wrap">
+              <div className="flex items-center gap-1 flex-wrap">
+                {([2, 3, 4, 5] as const).map((count) => (
+                  <button
+                    key={count}
+                    type="button"
+                    onClick={() => handleApplyStepPreset(count)}
+                    className={cn(
+                      'px-2 py-1 rounded-md text-[10px] font-semibold border cursor-pointer',
+                      gradientStops.length === count ? 'text-white' : 'opacity-75'
+                    )}
+                    style={
+                      gradientStops.length === count
+                        ? { backgroundColor: 'var(--theme-accent)', borderColor: 'var(--theme-accent)' }
+                        : { backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }
+                    }
+                  >
+                    {count} Steps
+                  </button>
+                ))}
               </div>
-
-              {/* Quick Save Current Palette Action */}
-              <div className="p-3 rounded-xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/50 dark:bg-indigo-950/20 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2">
-                  <BookmarkPlus size={16} className="text-indigo-500" />
-                  <div>
-                    <div className="font-bold text-zinc-900 dark:text-zinc-100 text-xs">
-                      Save Active Gradient to Library
-                    </div>
-                    <div className="text-[9.5px] text-zinc-500 dark:text-zinc-400">
-                      Store this color palette in your persistent library to reuse across any subtitle projects.
-                    </div>
-                  </div>
-                </div>
+              <div className="flex items-center gap-1">
                 <button
                   type="button"
-                  onClick={handleOpenSaveModal}
-                  className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-xs transition-colors cursor-pointer shrink-0 flex items-center gap-1.5"
+                  onClick={handleDistributeStopsEvenly}
+                  className="px-2 py-1 rounded-md border text-[9.5px] font-semibold cursor-pointer"
+                  style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
                 >
-                  <Bookmark size={12} />
-                  <span>Save to Library</span>
+                  Even
+                </button>
+                <button
+                  type="button"
+                  onClick={handleReversePalette}
+                  className="px-2 py-1 rounded-md border text-[9.5px] font-semibold flex items-center gap-0.5 cursor-pointer"
+                  style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+                >
+                  <ArrowLeftRight size={10} />
+                  <span>Flip</span>
                 </button>
               </div>
             </div>
-          )}
 
-          {/* TAB 2: MULTI-STEP GRADIENT PALETTE PICKER */}
-          {activeTab === 'custom-builder' && (
-            <div className="space-y-4">
-              <div className="p-4 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/70 dark:bg-zinc-850 space-y-4 shadow-xs">
-                {/* Header & Quick Actions */}
-                <div className="flex items-center justify-between flex-wrap gap-2">
-                  <div className="flex items-center gap-1.5">
-                    <Pipette size={15} className="text-emerald-500" />
-                    <div>
-                      <span className="font-bold text-zinc-900 dark:text-zinc-100 text-xs uppercase tracking-wider block">
-                        Multi-Step Gradient Palette Picker
-                      </span>
-                      <span className="text-[9px] text-zinc-400">
-                        Click track to add color stops • Drag or slide position • Full wheel control
-                      </span>
-                    </div>
-                  </div>
-                  
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={handleDistributeStopsEvenly}
-                      className="px-2 py-1 rounded-lg bg-zinc-200 dark:bg-zinc-700 hover:bg-zinc-300 dark:hover:bg-zinc-600 text-zinc-700 dark:text-zinc-200 text-[10px] font-bold cursor-pointer transition-colors"
-                      title="Space all stops equally from 0% to 100%"
-                    >
-                      Even Spacing
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleReversePalette}
-                      className="px-2 py-1 rounded-lg bg-zinc-200 dark:bg-zinc-700 hover:bg-zinc-300 dark:hover:bg-zinc-600 text-zinc-700 dark:text-zinc-200 text-[10px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
-                      title="Reverse color stop order"
-                    >
-                      <ArrowLeftRight size={10} />
-                      <span>Reverse</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        updateConfig({ customColors: undefined });
-                        const syncd = selectedPalette.colors.map((c, i) => ({
-                          id: `stop-${i}`,
-                          color: c,
-                          offset: Math.round((i / Math.max(1, selectedPalette.colors.length - 1)) * 100)
-                        }));
-                        setGradientStops(syncd);
-                        setActiveStopId(syncd[0]?.id || 'stop-0');
-                      }}
-                      className="px-2 py-1 rounded-lg bg-zinc-200 dark:bg-zinc-700 hover:bg-zinc-300 dark:hover:bg-zinc-600 text-zinc-700 dark:text-zinc-200 text-[10px] font-bold cursor-pointer"
-                    >
-                      Reset
-                    </button>
-                  </div>
-                </div>
-
-                {/* Quick Step Presets (2, 3, 4, 5 steps) */}
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className="text-[9.5px] font-bold text-zinc-500 uppercase tracking-wider mr-1">
-                    Quick Steps:
-                  </span>
-                  {[
-                    { label: '2-Step Duo', count: 2 as const },
-                    { label: '3-Step Triad', count: 3 as const },
-                    { label: '4-Step Quad', count: 4 as const },
-                    { label: '5-Step Spectrum', count: 5 as const }
-                  ].map(p => (
-                    <button
-                      key={p.count}
-                      type="button"
-                      onClick={() => handleApplyStepPreset(p.count)}
-                      className={cn(
-                        "px-2 py-0.5 rounded-md text-[9.5px] font-bold border transition-colors cursor-pointer",
-                        gradientStops.length === p.count
-                          ? "bg-emerald-500 text-white border-emerald-500"
-                          : "bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700 hover:border-zinc-400"
-                      )}
-                    >
-                      {p.label}
-                    </button>
-                  ))}
-                </div>
-
-                {/* INTERACTIVE MULTI-STEP GRADIENT TRACK */}
-                <div className="space-y-1.5 pt-1">
-                  <div className="relative pt-2 pb-8 select-none">
-                    {/* Visual Gradient Track with Click-to-Add Stop */}
-                    <div 
-                      onClick={handleTrackClick}
-                      className="h-9 w-full rounded-xl cursor-crosshair border border-zinc-300 dark:border-zinc-700 shadow-inner relative overflow-hidden transition-all"
-                      style={{ background: trackGradientCss }}
-                      title="Click anywhere on the track to add a color stop"
-                    />
-
-                    {/* Interactive Stop Pin Handles */}
-                    {sortedStops.map(stop => {
-                      const isSelected = stop.id === activeStop.id;
-                      return (
-                        <div
-                          key={stop.id}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setActiveStopId(stop.id);
-                          }}
-                          className={cn(
-                            "absolute -bottom-1 -translate-x-1/2 flex flex-col items-center cursor-pointer transition-transform group z-10",
-                            isSelected ? "scale-125 z-20" : "hover:scale-110 opacity-85"
-                          )}
-                          style={{ left: `${stop.offset}%` }}
-                        >
-                          {/* Pin Pointer arrow */}
-                          <div 
-                            className="w-0 h-0 border-l-[5px] border-l-transparent border-r-[5px] border-r-transparent border-b-[6px]"
-                            style={{ 
-                              borderBottomColor: isSelected ? '#10B981' : '#71717A' 
-                            }}
-                          />
-                          {/* Circular Stop Swatch Pin */}
-                          <div 
-                            className={cn(
-                              "w-5 h-5 rounded-full border-2 shadow-md flex items-center justify-center transition-all",
-                              isSelected 
-                                ? "border-emerald-500 ring-2 ring-emerald-400/50" 
-                                : "border-white dark:border-zinc-900 group-hover:border-zinc-400"
-                            )}
-                            style={{ backgroundColor: stop.color }}
-                          >
-                            {isSelected && (
-                              <div className="w-1.5 h-1.5 rounded-full bg-white shadow-xs" />
-                            )}
-                          </div>
-                          {/* Percent label */}
-                          <span className={cn(
-                            "text-[8px] font-mono mt-0.5 px-1 rounded",
-                            isSelected ? "bg-emerald-500 text-white font-bold" : "text-zinc-400"
-                          )}>
-                            {stop.offset}%
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  <div className="flex items-center justify-between text-[9px] text-zinc-400 font-mono px-1">
-                    <span>0% (Start)</span>
-                    <span className="text-emerald-600 dark:text-emerald-400 font-bold">
-                      {gradientStops.length} Active Steps
-                    </span>
-                    <span>100% (End)</span>
-                  </div>
-                </div>
-
-                {/* Selected Stop Controller: Offset Slider & Precision Tuner */}
-                <div className="p-3 rounded-xl border border-zinc-200 dark:border-zinc-750 bg-white dark:bg-zinc-800 space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <div 
-                        className="w-5 h-5 rounded-lg border border-black/20 shadow-xs shrink-0" 
-                        style={{ backgroundColor: activeStop.color }} 
-                      />
-                      <span className="font-bold text-[11px] text-zinc-900 dark:text-zinc-100">
-                        Selected Stop: <span className="font-mono text-emerald-600 dark:text-emerald-400">{activeStop.color}</span>
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={handleDuplicateActiveStop}
-                        className="px-2 py-1 rounded bg-zinc-100 dark:bg-zinc-700 hover:bg-zinc-200 dark:hover:bg-zinc-600 text-zinc-700 dark:text-zinc-200 text-[10px] font-bold cursor-pointer"
-                        title="Duplicate this stop"
-                      >
-                        Duplicate
-                      </button>
-                      {gradientStops.length > 2 && (
-                        <button
-                          type="button"
-                          onClick={handleDeleteActiveStop}
-                          className="px-2 py-1 rounded bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 hover:bg-rose-100 text-[10px] font-bold cursor-pointer"
-                          title="Remove stop"
-                        >
-                          Remove Stop
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Offset Range Slider */}
-                  <div className="space-y-1">
-                    <div className="flex items-center justify-between text-[9px] font-bold text-zinc-500 uppercase tracking-wider">
-                      <span>Timeline Position</span>
-                      <span className="font-mono text-zinc-800 dark:text-zinc-200">{activeStop.offset}%</span>
-                    </div>
-                    <input
-                      type="range"
-                      min={0}
-                      max={100}
-                      value={activeStop.offset}
-                      onChange={e => handleUpdateActiveStopOffset(Number(e.target.value))}
-                      className="w-full h-2 rounded-lg appearance-none cursor-pointer accent-emerald-500 bg-zinc-200 dark:bg-zinc-700"
-                    />
-                  </div>
-                </div>
-
-                {/* DOUBLED-SIZE COLOR WHEEL FOR SELECTED STOP */}
-                <div className="pt-2 border-t border-zinc-200 dark:border-zinc-750 flex flex-col items-center justify-center gap-3">
-                  <div className="w-full flex items-center justify-between">
-                    <span className="font-bold text-[10.5px] uppercase tracking-wider text-zinc-700 dark:text-zinc-300 flex items-center gap-1.5">
-                      <Pipette size={12} className="text-emerald-500" />
-                      <span>Doubled Precision Color Wheel</span>
-                    </span>
-                    <span className="font-mono text-[10px] text-zinc-400">
-                      288px Full-Resolution Canvas
-                    </span>
-                  </div>
-
-                  {/* ColorWheelPicker rendered inline with doubled dimensions */}
-                  <div className="flex justify-center w-full py-1">
-                    <ColorWheelPicker
-                      color={activeStop.color}
-                      onChange={c => handleUpdateActiveStopColor(c)}
-                      label={`Stop (${activeStop.offset}%) Color Wheel`}
-                      showAlpha={false}
-                      size="double"
-                      inline={true}
-                    />
-                  </div>
-
-                  {/* Direction & Save to Library bar */}
-                  <div className="w-full flex flex-col sm:flex-row items-center justify-between gap-2.5 pt-2 border-t border-zinc-200 dark:border-zinc-750">
-                    {/* Gradient Direction Angle */}
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Angle:</span>
-                      <div className="flex items-center gap-1">
-                        {(['45deg', '90deg', '135deg', '180deg'] as const).map(angle => (
-                          <button
-                            key={angle}
-                            type="button"
-                            onClick={() => updateConfig({ gradientDirection: angle })}
-                            className={cn(
-                              "px-2 py-1 rounded-md text-[9.5px] font-mono font-bold cursor-pointer transition-colors",
-                              (config.gradientDirection || '135deg') === angle
-                                ? "bg-zinc-800 dark:bg-zinc-200 text-white dark:text-zinc-900"
-                                : "bg-zinc-200 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-300"
-                            )}
-                          >
-                            {angle}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={handleOpenSaveModal}
-                      className="w-full sm:w-auto px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-xs transition-colors cursor-pointer flex items-center justify-center gap-1.5"
-                    >
-                      <Bookmark size={13} />
-                      <span>Save Multi-Step Gradient to Library</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* TAB 3: SOLID COLORS TAB */}
-          {activeTab === 'solid-colors' && (
-            <div className="space-y-4">
-              <div className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/70 dark:bg-zinc-850 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="font-bold text-zinc-900 dark:text-zinc-100 text-xs uppercase tracking-wider flex items-center gap-1.5">
-                      <Sun size={13} className="text-amber-500" />
-                      <span>Curated Subtitle Solid Colors</span>
-                    </h3>
-                    <p className="text-[9.5px] text-zinc-500 dark:text-zinc-400">
-                      High-visibility cinema standard solid colors without gradient blending
-                    </p>
-                  </div>
-                  <span className="text-[9px] font-mono text-zinc-400">
-                    {SOLID_SUBTITLE_COLORS.length} Presets
-                  </span>
-                </div>
-
-                {/* Solid Color Grid */}
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-                  {SOLID_SUBTITLE_COLORS.map(c => {
-                    const isSelected = config.customColors?.length === 1 && config.customColors[0].toUpperCase() === c.hex.toUpperCase();
-                    return (
-                      <button
-                        key={c.hex}
-                        type="button"
-                        onClick={() => handleSelectSolidColor(c.hex)}
-                        className={cn(
-                          "p-2.5 rounded-xl border text-left transition-all flex items-center gap-2.5 cursor-pointer shadow-2xs group",
-                          isSelected
-                            ? "border-emerald-500 ring-2 ring-emerald-500/30 bg-emerald-50/40 dark:bg-emerald-950/30"
-                            : "border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 bg-white dark:bg-zinc-800"
-                        )}
-                      >
-                        <div 
-                          className="w-7 h-7 rounded-lg border border-black/15 shadow-xs shrink-0 group-hover:scale-105 transition-transform"
-                          style={{ backgroundColor: c.hex }}
-                        />
-                        <div className="overflow-hidden">
-                          <div className="font-bold text-zinc-900 dark:text-zinc-100 text-[10px] truncate">
-                            {c.name}
-                          </div>
-                          <div className="font-mono text-[8.5px] text-zinc-400 truncate">
-                            {c.hex}
-                          </div>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Custom Solid Color Wheel Picker (Doubled in Size) */}
-              <div className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/70 dark:bg-zinc-850 space-y-3">
-                <div className="flex items-center justify-between">
-                  <h4 className="font-bold text-zinc-900 dark:text-zinc-100 text-xs uppercase tracking-wider flex items-center gap-1.5">
-                    <Pipette size={13} className="text-emerald-500" />
-                    <span>Custom Solid Color Wheel (Doubled Resolution)</span>
-                  </h4>
-                  <span className="font-mono text-xs font-bold text-emerald-600 dark:text-emerald-400">
-                    {customSolidColor}
-                  </span>
-                </div>
-
-                <div className="flex flex-col items-center justify-center gap-4">
-                  <ColorWheelPicker
-                    color={customSolidColor}
-                    onChange={c => {
-                      setCustomSolidColor(c);
-                      updateConfig({
-                        paletteId: 'solid-custom',
-                        customColors: [c],
-                        gradientMode: 'block-shift'
-                      });
+            <div className="relative pt-1 pb-7 select-none">
+              <div
+                onClick={handleTrackClick}
+                className="h-8 w-full rounded-lg cursor-crosshair border relative"
+                style={{ background: trackGradientCss, borderColor: 'var(--theme-border)' }}
+                title="Tap track to add color stop"
+              />
+              {sortedStops.map((stop) => {
+                const isSelected = stop.id === activeStop.id;
+                return (
+                  <div
+                    key={stop.id}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setActiveStopId(stop.id);
                     }}
-                    label="Solid Color Wheel"
-                    showAlpha={false}
-                    size="double"
-                    inline={true}
-                  />
-
-                  <div className="space-y-2 w-full">
-                    <div className="p-3 rounded-lg bg-black text-white flex items-center justify-center font-bold text-sm shadow-inner" style={{ color: customSolidColor }}>
-                      Sample Subtitle in {customSolidColor}
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleSelectSolidColor(customSolidColor)}
-                        className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition-colors cursor-pointer text-center"
-                      >
-                        Apply Solid Color to Preview
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleOpenSaveModal}
-                        className="py-2 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-xs transition-colors cursor-pointer flex items-center gap-1"
-                      >
-                        <Bookmark size={12} />
-                        <span>Save</span>
-                      </button>
-                    </div>
+                    className={cn(
+                      'absolute bottom-0 -translate-x-1/2 flex flex-col items-center cursor-pointer',
+                      isSelected ? 'scale-115 z-20' : 'opacity-85 z-10'
+                    )}
+                    style={{ left: `${stop.offset}%` }}
+                  >
+                    <div
+                      className="w-4 h-4 rounded-full border-2 shadow"
+                      style={{
+                        backgroundColor: stop.color,
+                        borderColor: isSelected ? 'var(--theme-accent)' : '#ffffff',
+                      }}
+                    />
+                    <span className="text-[8px] font-mono mt-0.5 opacity-75">{stop.offset}%</span>
                   </div>
-                </div>
-              </div>
+                );
+              })}
             </div>
-          )}
 
-          {/* TAB 4: USER-SAVEABLE GRADIENT LIBRARY */}
-          {activeTab === 'library' && (
-            <div className="space-y-4">
-              {/* Library Toolbar */}
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
-                {/* Search Bar */}
-                <div className="relative flex-1">
-                  <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 pointer-events-none" />
-                  <input
-                    type="text"
-                    value={librarySearch}
-                    onChange={e => setLibrarySearch(e.target.value)}
-                    placeholder="Search saved palettes by name or tags..."
-                    className="w-full pl-8 pr-3 py-1.5 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 text-xs focus:outline-none focus:border-indigo-500 shadow-2xs"
-                  />
-                  {librarySearch && (
+            <div
+              className="p-2 rounded-lg border space-y-2"
+              style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10.5px] font-mono font-semibold">{activeStop.color}</span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={handleDuplicateActiveStop}
+                    className="px-2 py-0.5 rounded border text-[9.5px] font-semibold cursor-pointer"
+                    style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+                  >
+                    Duplicate
+                  </button>
+                  {gradientStops.length > 2 && (
                     <button
                       type="button"
-                      onClick={() => setLibrarySearch('')}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 text-[11px]"
+                      onClick={handleDeleteActiveStop}
+                      className="px-2 py-0.5 rounded border text-[9.5px] font-semibold text-red-500 border-red-500/30 cursor-pointer"
                     >
-                      ×
+                      Remove
                     </button>
                   )}
                 </div>
-
-                {/* Library Action Buttons */}
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <button
-                    type="button"
-                    onClick={handleOpenSaveModal}
-                    className="px-2.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs flex items-center gap-1 shadow-xs transition-colors cursor-pointer"
-                  >
-                    <Plus size={12} />
-                    <span>Save Current</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleExportLibraryJson}
-                    className="p-1.5 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 text-xs transition-colors cursor-pointer"
-                    title="Export Library to JSON backup"
-                  >
-                    <Download size={14} />
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => importFileInputRef.current?.click()}
-                    className="p-1.5 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 text-xs transition-colors cursor-pointer"
-                    title="Import Library from JSON file"
-                  >
-                    <Upload size={14} />
-                  </button>
-                  <input
-                    ref={importFileInputRef}
-                    type="file"
-                    accept=".json"
-                    onChange={handleImportLibraryJson}
-                    className="hidden"
-                  />
-                </div>
               </div>
-
-              {/* Saved Palettes List */}
-              {filteredPalettes.length === 0 ? (
-                <div className="p-8 text-center rounded-2xl border border-dashed border-zinc-300 dark:border-zinc-700 space-y-3">
-                  <div className="w-10 h-10 rounded-full bg-indigo-50 dark:bg-indigo-950/50 text-indigo-500 flex items-center justify-center mx-auto">
-                    <FolderHeart size={20} />
-                  </div>
-                  <div>
-                    <h4 className="font-bold text-zinc-800 dark:text-zinc-200 text-sm">
-                      No saved palettes found
-                    </h4>
-                    <p className="text-zinc-500 text-xs max-w-sm mx-auto mt-0.5">
-                      Save custom-built gradients so you can reuse them in future subtitle translations and exports.
-                    </p>
-                  </div>
-                  <div className="flex items-center justify-center gap-2 pt-1">
-                    <button
-                      type="button"
-                      onClick={handleRestoreStarterFavorites}
-                      className="px-3 py-1.5 rounded-xl bg-zinc-200 dark:bg-zinc-700 hover:bg-zinc-300 dark:hover:bg-zinc-600 text-zinc-800 dark:text-zinc-200 font-bold text-xs cursor-pointer"
-                    >
-                      Load Starter Palettes
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleOpenSaveModal}
-                      className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs cursor-pointer"
-                    >
-                      Save Active Gradient
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {filteredPalettes.map(palette => {
-                    const isEditing = editingPaletteId === palette.id;
-                    return (
-                      <div
-                        key={palette.id}
-                        className="p-3.5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-850 shadow-2xs space-y-2.5 transition-all hover:border-indigo-400 dark:hover:border-indigo-500 group"
-                      >
-                        {/* Header with Title and Menu */}
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex-1 min-w-0">
-                            {isEditing ? (
-                              <div className="flex items-center gap-1">
-                                <input
-                                  type="text"
-                                  value={editingPaletteName}
-                                  onChange={e => setEditingPaletteName(e.target.value)}
-                                  className="w-full px-2 py-0.5 rounded border border-indigo-400 bg-white dark:bg-zinc-800 text-xs font-bold"
-                                  autoFocus
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => handleSaveRename(palette.id)}
-                                  className="p-1 rounded bg-emerald-600 text-white"
-                                >
-                                  <Check size={11} />
-                                </button>
-                              </div>
-                            ) : (
-                              <div className="flex items-center gap-1.5">
-                                <h4 className="font-bold text-zinc-900 dark:text-zinc-100 text-xs truncate">
-                                  {palette.name}
-                                </h4>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setEditingPaletteId(palette.id);
-                                    setEditingPaletteName(palette.name);
-                                  }}
-                                  className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition-opacity"
-                                  title="Rename palette"
-                                >
-                                  <Edit2 size={10} />
-                                </button>
-                              </div>
-                            )}
-
-                            {palette.description && (
-                              <p className="text-[9.5px] text-zinc-500 dark:text-zinc-400 truncate">
-                                {palette.description}
-                              </p>
-                            )}
-                          </div>
-
-                          {/* Delete button */}
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteSavedPalette(palette.id, palette.name)}
-                            className="text-zinc-400 hover:text-rose-500 p-1 rounded transition-colors cursor-pointer"
-                            title="Delete saved palette"
-                          >
-                            <Trash2 size={12} />
-                          </button>
-                        </div>
-
-                        {/* Multi-color gradient strip preview */}
-                        <div 
-                          className="h-6 w-full rounded-lg shadow-2xs border border-zinc-200/50 dark:border-zinc-700/50"
-                          style={{
-                            background: `linear-gradient(90deg, ${palette.colors.join(', ')})`
-                          }}
-                        />
-
-                        {/* Color swatches & metadata pills */}
-                        <div className="flex items-center justify-between gap-2 pt-0.5">
-                          <div className="flex items-center gap-1 overflow-x-auto max-w-[65%]">
-                            {palette.colors.map((c, i) => (
-                              <span 
-                                key={i}
-                                className="w-4 h-4 rounded-full border border-black/15 shrink-0 shadow-2xs"
-                                style={{ backgroundColor: c }}
-                                title={c}
-                              />
-                            ))}
-                          </div>
-
-                          <div className="flex items-center gap-1 text-[8.5px] font-mono text-zinc-400 shrink-0">
-                            <span>{palette.colors.length} Colors</span>
-                            {palette.gradientMode && (
-                              <span className="px-1.5 py-0.2 rounded bg-zinc-100 dark:bg-zinc-750 text-zinc-600 dark:text-zinc-300">
-                                {palette.gradientMode}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Action buttons */}
-                        <div className="flex items-center gap-1.5 pt-1 border-t border-zinc-100 dark:border-zinc-800">
-                          <button
-                            type="button"
-                            onClick={() => handleLoadSavedPalette(palette)}
-                            className="flex-1 py-1 px-2 rounded-lg bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 font-bold text-[10px] transition-colors cursor-pointer text-center"
-                          >
-                            Load to Preview
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleApplySavedPaletteDirectly(palette)}
-                            className="py-1 px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] transition-colors cursor-pointer flex items-center gap-1 shadow-2xs"
-                          >
-                            <Sparkles size={10} />
-                            <span>Apply</span>
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={activeStop.offset}
+                onChange={(e) => handleUpdateActiveStopOffset(Number(e.target.value))}
+                className="w-full cursor-pointer"
+              />
             </div>
-          )}
+
+            <div className="flex justify-center py-1">
+              <ColorWheelPicker
+                color={activeStop.color}
+                onChange={(c) => handleUpdateActiveStopColor(c)}
+                label={`Stop (${activeStop.offset}%)`}
+                showAlpha={false}
+                size="double"
+                inline={true}
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-2 flex-wrap pt-1 border-t" style={{ borderColor: 'var(--theme-border)' }}>
+              <div className="flex items-center gap-1">
+                {(['45deg', '90deg', '135deg', '180deg'] as const).map((angle) => (
+                  <button
+                    key={angle}
+                    type="button"
+                    onClick={() => updateConfig({ gradientDirection: angle })}
+                    className={cn(
+                      'px-1.5 py-0.5 rounded text-[9.5px] font-mono font-semibold border cursor-pointer',
+                      (config.gradientDirection || '135deg') === angle ? 'text-white' : 'opacity-70'
+                    )}
+                    style={
+                      (config.gradientDirection || '135deg') === angle
+                        ? { backgroundColor: 'var(--theme-accent)', borderColor: 'var(--theme-accent)' }
+                        : { backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }
+                    }
+                  >
+                    {angle}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={handleOpenSaveModal}
+                className="px-2.5 py-1 rounded-lg text-white text-[10px] font-semibold flex items-center gap-1 cursor-pointer"
+                style={{ backgroundColor: 'var(--theme-accent)' }}
+              >
+                <Bookmark size={11} />
+                <span>Save Palette</span>
+              </button>
+            </div>
+          </DropdownMenuSection>
+
+          {/* Drop-Down 6: Solid Colors */}
+          <DropdownMenuSection
+            id="solid"
+            title="Solid Subtitle Colors"
+            summary={customSolidColor}
+            icon={Sun}
+          >
+            <div className="grid grid-cols-2 gap-1.5">
+              {SOLID_SUBTITLE_COLORS.map((c) => {
+                const isSelected =
+                  config.customColors?.length === 1 && config.customColors[0].toUpperCase() === c.hex.toUpperCase();
+                return (
+                  <button
+                    key={c.hex}
+                    type="button"
+                    onClick={() => handleSelectSolidColor(c.hex)}
+                    className={cn(
+                      'p-2 rounded-lg border text-left flex items-center gap-2 cursor-pointer',
+                      isSelected && 'ring-1 ring-[var(--theme-accent)]'
+                    )}
+                    style={{
+                      backgroundColor: isSelected ? 'var(--theme-accent-soft)' : 'var(--theme-elevated)',
+                      borderColor: isSelected ? 'var(--theme-accent)' : 'var(--theme-border)',
+                    }}
+                  >
+                    <span
+                      className="w-5 h-5 rounded border border-black/15 shrink-0"
+                      style={{ backgroundColor: c.hex }}
+                    />
+                    <div className="min-w-0">
+                      <div className="font-semibold text-[10px] truncate">{c.name}</div>
+                      <div className="font-mono text-[8.5px] opacity-60">{c.hex}</div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="flex flex-col items-center gap-2 pt-2 border-t" style={{ borderColor: 'var(--theme-border)' }}>
+              <ColorWheelPicker
+                color={customSolidColor}
+                onChange={(c) => {
+                  setCustomSolidColor(c);
+                  updateConfig({
+                    paletteId: 'solid-custom',
+                    customColors: [c],
+                    gradientMode: 'block-shift',
+                  });
+                }}
+                label="Custom Solid Color"
+                showAlpha={false}
+                size="double"
+                inline={true}
+              />
+              <button
+                type="button"
+                onClick={() => handleSelectSolidColor(customSolidColor)}
+                className="w-full py-1.5 rounded-lg text-white font-semibold text-xs cursor-pointer"
+                style={{ backgroundColor: 'var(--theme-accent)' }}
+              >
+                Use Solid {customSolidColor}
+              </button>
+            </div>
+          </DropdownMenuSection>
+
+          {/* Drop-Down 7: Gradient Library */}
+          <DropdownMenuSection
+            id="library"
+            title={`Gradient Library (${savedPalettes.length})`}
+            summary="Saved & reusable palettes"
+            icon={Bookmark}
+          >
+            <div className="flex items-center gap-1.5">
+              <div className="relative flex-1 min-w-0">
+                <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 opacity-45 pointer-events-none" />
+                <input
+                  type="text"
+                  value={librarySearch}
+                  onChange={(e) => setLibrarySearch(e.target.value)}
+                  placeholder="Search library..."
+                  className="w-full pl-7 pr-2.5 py-1.5 rounded-lg border text-[11px]"
+                  style={{
+                    backgroundColor: 'var(--theme-elevated)',
+                    borderColor: 'var(--theme-border)',
+                    color: 'var(--theme-text)',
+                  }}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={handleOpenSaveModal}
+                className="min-h-[32px] px-2.5 rounded-lg text-white text-[11px] font-semibold flex items-center gap-1 cursor-pointer shrink-0"
+                style={{ backgroundColor: 'var(--theme-accent)' }}
+              >
+                <Plus size={12} />
+                <span>Save</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleExportLibraryJson}
+                className="min-h-[32px] px-2 rounded-lg border text-[11px] cursor-pointer shrink-0"
+                style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+                title="Export Library JSON"
+              >
+                <Download size={13} />
+              </button>
+              <button
+                type="button"
+                onClick={() => importFileInputRef.current?.click()}
+                className="min-h-[32px] px-2 rounded-lg border text-[11px] cursor-pointer shrink-0"
+                style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+                title="Import Library JSON"
+              >
+                <Upload size={13} />
+              </button>
+              <input
+                ref={importFileInputRef}
+                type="file"
+                accept=".json"
+                onChange={handleImportLibraryJson}
+                className="hidden"
+              />
+            </div>
+
+            {filteredPalettes.length === 0 ? (
+              <div className="p-4 text-center rounded-lg border border-dashed space-y-2" style={{ borderColor: 'var(--theme-border)' }}>
+                <p className="text-[11px] opacity-65">No saved palettes match.</p>
+                <button
+                  type="button"
+                  onClick={handleRestoreStarterFavorites}
+                  className="px-2.5 py-1 rounded-lg border text-[10px] font-semibold cursor-pointer"
+                  style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+                >
+                  Load Starters
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-72 overflow-y-auto pr-0.5">
+                {filteredPalettes.map((palette) => {
+                  const isEditing = editingPaletteId === palette.id;
+                  return (
+                    <div
+                      key={palette.id}
+                      className="p-2.5 rounded-lg border space-y-2"
+                      style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+                    >
+                      <div className="flex items-center justify-between gap-1.5">
+                        <div className="min-w-0 flex-1">
+                          {isEditing ? (
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="text"
+                                value={editingPaletteName}
+                                onChange={(e) => setEditingPaletteName(e.target.value)}
+                                className="w-full px-2 py-0.5 rounded border text-xs font-semibold"
+                                autoFocus
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleSaveRename(palette.id)}
+                                className="p-1 rounded bg-emerald-600 text-white cursor-pointer"
+                              >
+                                <Check size={11} />
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1">
+                              <span className="font-semibold text-[11px] truncate">{palette.name}</span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingPaletteId(palette.id);
+                                  setEditingPaletteName(palette.name);
+                                }}
+                                className="opacity-55 hover:opacity-100 cursor-pointer"
+                                title="Rename"
+                              >
+                                <Edit2 size={10} />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteSavedPalette(palette.id, palette.name)}
+                          className="text-red-500 opacity-75 hover:opacity-100 p-0.5 cursor-pointer"
+                          title="Delete saved palette"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+
+                      <div
+                        className="h-4 w-full rounded border border-black/10"
+                        style={{ background: `linear-gradient(90deg, ${palette.colors.join(', ')})` }}
+                      />
+
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleLoadSavedPalette(palette)}
+                          className="flex-1 py-1 px-2 rounded-md border text-[10px] font-semibold cursor-pointer"
+                          style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+                        >
+                          Preview
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleApplySavedPaletteDirectly(palette)}
+                          className="py-1 px-2.5 rounded-md text-white text-[10px] font-semibold flex items-center gap-1 cursor-pointer"
+                          style={{ backgroundColor: 'var(--theme-accent)' }}
+                        >
+                          <Sparkles size={10} />
+                          <span>Apply</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </DropdownMenuSection>
         </div>
 
-        {/* DRAWER FOOTER WITH EXPORT MENU DROPDOWN */}
-        <div className="relative p-3.5 sm:p-4 border-t border-zinc-200 dark:border-zinc-800 bg-zinc-50/95 dark:bg-zinc-850/95 flex items-center justify-between shrink-0">
-          {/* Left Actions: Clear Formatting & Export Subtitles Menu */}
-          <div className="flex items-center gap-2">
+        {/* Drawer Footer */}
+        <div
+          className="relative px-3 py-2.5 border-t flex items-center justify-between gap-2 shrink-0"
+          style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+        >
+          <div className="flex items-center gap-1.5">
             <button
               type="button"
               onClick={handleClearAllFormatting}
-              className="flex items-center gap-1 px-2.5 py-1.5 text-zinc-500 hover:text-red-600 text-xs font-bold transition-colors cursor-pointer"
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-xs font-medium text-red-500 cursor-pointer"
+              style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
             >
               <RotateCcw size={12} />
               <span>Clear</span>
             </button>
 
-            {/* EXPORT OPTIONS DROPDOWN BUTTON */}
             <div className="relative">
               <button
                 type="button"
                 onClick={() => setIsExportMenuOpen(!isExportMenuOpen)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 font-bold text-xs shadow-2xs transition-colors cursor-pointer"
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border font-semibold text-xs cursor-pointer"
+                style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
               >
-                <Download size={13} className="text-emerald-500" />
-                <span>Export Options</span>
-                <ChevronUp size={12} className={cn("text-zinc-400 transition-transform", !isExportMenuOpen && "rotate-180")} />
+                <Download size={12} style={{ color: 'var(--theme-accent)' }} />
+                <span>Export</span>
+                <ChevronUp size={12} className={cn('opacity-60 transition-transform', !isExportMenuOpen && 'rotate-180')} />
               </button>
 
-              {/* Upward Popover Menu */}
               {isExportMenuOpen && (
                 <>
-                  <div 
-                    className="fixed inset-0 z-[140]" 
-                    onClick={() => setIsExportMenuOpen(false)} 
-                  />
-                  <div className="absolute bottom-full left-0 mb-2 w-72 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl p-2 z-[150] space-y-1">
-                    <div className="px-2.5 py-1.5 border-b border-zinc-100 dark:border-zinc-800 flex items-center justify-between">
-                      <span className="font-bold text-[10px] uppercase tracking-wider text-zinc-500">
-                        Export Formats ({subtitles.length} segments)
-                      </span>
-                      <span className="text-[9px] font-mono text-emerald-500 font-bold">Video Ready</span>
-                    </div>
-
-                    {/* Formatted SRT */}
-                    <button
-                      type="button"
-                      onClick={() => { handleDirectDownload('srt'); setIsExportMenuOpen(false); }}
-                      className="w-full p-2 rounded-xl text-left hover:bg-emerald-50 dark:hover:bg-emerald-950/40 flex items-center gap-2.5 transition-colors group cursor-pointer"
-                    >
-                      <div className="p-1.5 rounded-lg bg-emerald-100 dark:bg-emerald-900/50 text-emerald-600 dark:text-emerald-400 group-hover:scale-105 transition-transform">
-                        <Download size={13} />
-                      </div>
-                      <div>
-                        <div className="font-bold text-zinc-900 dark:text-zinc-100 text-xs">Formatted SRT</div>
-                        <div className="text-[9px] text-zinc-400">VLC & PotPlayer &lt;font color&gt; tags</div>
-                      </div>
-                    </button>
-
-                    {/* Advanced ASS */}
-                    <button
-                      type="button"
-                      onClick={() => { handleDirectDownload('ass'); setIsExportMenuOpen(false); }}
-                      className="w-full p-2 rounded-xl text-left hover:bg-indigo-50 dark:hover:bg-indigo-950/40 flex items-center gap-2.5 transition-colors group cursor-pointer"
-                    >
-                      <div className="p-1.5 rounded-lg bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400 group-hover:scale-105 transition-transform">
-                        <Sparkles size={13} />
-                      </div>
-                      <div>
-                        <div className="font-bold text-zinc-900 dark:text-zinc-100 text-xs">Advanced ASS</div>
-                        <div className="text-[9px] text-zinc-400">SubStation Alpha v4+ with color tags</div>
-                      </div>
-                    </button>
-
-                    {/* SSA v4 */}
-                    <button
-                      type="button"
-                      onClick={() => { handleDirectDownload('ssa'); setIsExportMenuOpen(false); }}
-                      className="w-full p-2 rounded-xl text-left hover:bg-purple-50 dark:hover:bg-purple-950/40 flex items-center gap-2.5 transition-colors group cursor-pointer"
-                    >
-                      <div className="p-1.5 rounded-lg bg-purple-100 dark:bg-purple-900/50 text-purple-600 dark:text-purple-400 group-hover:scale-105 transition-transform">
-                        <Film size={13} />
-                      </div>
-                      <div>
-                        <div className="font-bold text-zinc-900 dark:text-zinc-100 text-xs">SSA v4</div>
-                        <div className="text-[9px] text-zinc-400">Standard SubStation Alpha v4</div>
-                      </div>
-                    </button>
-
-                    {/* WebVTT */}
-                    <button
-                      type="button"
-                      onClick={() => { handleDirectDownload('vtt'); setIsExportMenuOpen(false); }}
-                      className="w-full p-2 rounded-xl text-left hover:bg-blue-50 dark:hover:bg-blue-950/40 flex items-center gap-2.5 transition-colors group cursor-pointer"
-                    >
-                      <div className="p-1.5 rounded-lg bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400 group-hover:scale-105 transition-transform">
-                        <FileCode size={13} />
-                      </div>
-                      <div>
-                        <div className="font-bold text-zinc-900 dark:text-zinc-100 text-xs">WebVTT (.vtt)</div>
-                        <div className="text-[9px] text-zinc-400">HTML5 Web & Mobile Video Players</div>
-                      </div>
-                    </button>
-
-                    {/* Styled JSON */}
-                    <button
-                      type="button"
-                      onClick={() => { handleDirectDownload('json'); setIsExportMenuOpen(false); }}
-                      className="w-full p-2 rounded-xl text-left hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 transition-colors group cursor-pointer"
-                    >
-                      <div className="p-1.5 rounded-lg bg-zinc-200 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-300 group-hover:scale-105 transition-transform">
-                        <Download size={13} />
-                      </div>
-                      <div>
-                        <div className="font-bold text-zinc-900 dark:text-zinc-100 text-xs">Styled JSON</div>
-                        <div className="text-[9px] text-zinc-400">Full programmatic styled dataset</div>
-                      </div>
-                    </button>
-
-                    {/* Clean Plain SRT */}
-                    <button
-                      type="button"
-                      onClick={() => { handleDirectDownload('clean'); setIsExportMenuOpen(false); }}
-                      className="w-full p-2 rounded-xl text-left hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 transition-colors group cursor-pointer"
-                    >
-                      <div className="p-1.5 rounded-lg bg-zinc-200 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-300 group-hover:scale-105 transition-transform">
-                        <Type size={13} />
-                      </div>
-                      <div>
-                        <div className="font-bold text-zinc-900 dark:text-zinc-100 text-xs">Clean Plain SRT</div>
-                        <div className="text-[9px] text-zinc-400">Stripped of all formatting tags</div>
-                      </div>
-                    </button>
+                  <div className="fixed inset-0 z-[140]" onClick={() => setIsExportMenuOpen(false)} />
+                  <div
+                    className="absolute bottom-11 left-0 w-52 border rounded-xl shadow-2xl p-1.5 z-[150] space-y-1 max-h-[55dvh] overflow-y-auto"
+                    style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+                  >
+                    {[
+                      { id: 'srt' as const, label: 'Formatted SRT' },
+                      { id: 'ass' as const, label: 'Advanced ASS' },
+                      { id: 'ssa' as const, label: 'SSA v4' },
+                      { id: 'vtt' as const, label: 'WebVTT (.vtt)' },
+                      { id: 'json' as const, label: 'Styled JSON' },
+                      { id: 'clean' as const, label: 'Clean Plain SRT' },
+                    ].map((exp) => (
+                      <button
+                        key={exp.id}
+                        type="button"
+                        onClick={() => {
+                          handleDirectDownload(exp.id);
+                          setIsExportMenuOpen(false);
+                        }}
+                        className="w-full px-2.5 py-2 rounded-lg text-left hover:opacity-100 flex items-center justify-between text-xs font-medium cursor-pointer"
+                        style={{ backgroundColor: 'var(--theme-elevated)' }}
+                      >
+                        <span>{exp.label}</span>
+                        <Download size={12} style={{ color: 'var(--theme-accent)' }} />
+                      </button>
+                    ))}
                   </div>
                 </>
               )}
             </div>
           </div>
 
-          {/* Right Actions: Close & Apply */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <button
               type="button"
               onClick={onClose}
-              className="px-3.5 py-1.5 bg-zinc-200 dark:bg-zinc-700 hover:bg-zinc-300 dark:hover:bg-zinc-600 text-zinc-800 dark:text-zinc-200 rounded-xl font-bold text-xs transition-colors cursor-pointer"
+              className="px-2.5 py-1.5 rounded-lg border font-medium text-xs cursor-pointer"
+              style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
             >
               Close
             </button>
             <button
               type="button"
               onClick={handleApplyToSubtitles}
-              className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
+              className="px-3 py-1.5 text-white rounded-lg font-semibold text-xs flex items-center gap-1 cursor-pointer btn-inch-cap"
+              style={{ backgroundColor: 'var(--theme-accent)' }}
             >
-              <Sparkles size={13} />
-              <span>Apply to Subtitles</span>
+              <Sparkles size={12} />
+              <span>Apply</span>
             </button>
           </div>
         </div>
-      </div>
+      </RightEdgeDrawerShell>
 
       {/* SAVE TO GRADIENT LIBRARY MODAL */}
       {isSaveModalOpen && (
-        <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-[160] bg-black/70 backdrop-blur-xs flex items-center justify-center p-3">
+          <div
+            className="w-full max-w-[calc(100vw-24px)] sm:max-w-md border rounded-xl p-4 shadow-2xl space-y-3"
+            style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)', color: 'var(--theme-text)' }}
+          >
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <div className="p-2 rounded-xl bg-indigo-500 text-white">
-                  <BookmarkPlus size={18} />
-                </div>
-                <div>
-                  <h3 className="font-bold text-zinc-900 dark:text-zinc-100 text-sm">
-                    Save to Gradient Library
-                  </h3>
-                  <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
-                    Store palette permanently to use across projects
-                  </p>
-                </div>
+                <BookmarkPlus size={15} style={{ color: 'var(--theme-accent)' }} />
+                <h3 className="font-semibold text-sm">Save Palette</h3>
               </div>
-              <button
-                type="button"
-                onClick={() => setIsSaveModalOpen(false)}
-                className="p-1 rounded-lg text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
-              >
-                <X size={16} />
+              <button type="button" onClick={() => setIsSaveModalOpen(false)} className="p-1 rounded-lg opacity-60 hover:opacity-100 cursor-pointer">
+                <X size={15} />
               </button>
             </div>
 
-            {/* Gradient Strip Preview */}
-            <div className="space-y-1">
-              <div 
-                className="h-8 w-full rounded-xl shadow-inner border border-zinc-200 dark:border-zinc-700"
-                style={{ 
-                  background: `linear-gradient(90deg, ${sortedStops.map(s => s.color).join(', ')})`
-                }}
+            <div
+              className="h-7 w-full rounded-lg border"
+              style={{
+                borderColor: 'var(--theme-border)',
+                background: `linear-gradient(90deg, ${sortedStops.map((s) => s.color).join(', ')})`,
+              }}
+            />
+
+            <div className="space-y-2.5">
+              <input
+                type="text"
+                value={savePaletteName}
+                onChange={(e) => setSavePaletteName(e.target.value)}
+                placeholder="Palette name"
+                className="w-full px-3 py-2 rounded-lg border text-xs"
+                style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)', color: 'var(--theme-text)' }}
+                autoFocus
               />
-              <div className="flex items-center gap-1 flex-wrap">
-                {sortedStops.map((s, i) => (
-                  <span key={i} className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300">
-                    {s.color} ({s.offset}%)
-                  </span>
-                ))}
-              </div>
+              <input
+                type="text"
+                value={savePaletteDesc}
+                onChange={(e) => setSavePaletteDesc(e.target.value)}
+                placeholder="Optional note"
+                className="w-full px-3 py-2 rounded-lg border text-xs"
+                style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)', color: 'var(--theme-text)' }}
+              />
             </div>
 
-            {/* Form Fields */}
-            <div className="space-y-3">
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-600 dark:text-zinc-400">
-                  Palette Name:
-                </label>
-                <input
-                  type="text"
-                  value={savePaletteName}
-                  onChange={e => setSavePaletteName(e.target.value)}
-                  placeholder="e.g. Neon Cyber Gold"
-                  className="w-full px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 text-xs focus:outline-none focus:border-indigo-500"
-                  autoFocus
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-600 dark:text-zinc-400">
-                  Optional Description:
-                </label>
-                <input
-                  type="text"
-                  value={savePaletteDesc}
-                  onChange={e => setSavePaletteDesc(e.target.value)}
-                  placeholder="e.g. Best for high contrast dark videos and Urdu nastaliq"
-                  className="w-full px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 text-xs focus:outline-none focus:border-indigo-500"
-                />
-              </div>
-            </div>
-
-            {/* Modal actions */}
-            <div className="flex items-center justify-end gap-2 pt-2">
+            <div className="flex items-center justify-end gap-2 pt-1">
               <button
                 type="button"
                 onClick={() => setIsSaveModalOpen(false)}
-                className="px-3 py-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 font-bold text-xs cursor-pointer"
+                className="px-3 py-1.5 rounded-lg border font-medium text-xs cursor-pointer"
+                style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
               >
                 Cancel
               </button>
               <button
                 type="button"
                 onClick={handleSaveToLibrary}
-                className="px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-xs transition-colors cursor-pointer flex items-center gap-1.5"
+                className="px-3.5 py-1.5 rounded-lg text-white font-semibold text-xs flex items-center gap-1 cursor-pointer"
+                style={{ backgroundColor: 'var(--theme-accent)' }}
               >
                 <Save size={12} />
-                <span>Save to Library</span>
+                <span>Save</span>
               </button>
             </div>
           </div>

@@ -1,33 +1,29 @@
 import React, { useState } from 'react';
-import { 
-  Palette, 
-  Sparkles, 
-  X, 
-  Check, 
-  Trash2, 
-  Sliders, 
-  Layers, 
-  Download, 
-  Eye, 
-  Info,
+import {
+  Palette,
+  Sparkles,
+  X,
+  Check,
+  Trash2,
+  Download,
+  Eye,
   Type,
   FileCode,
-  ShieldAlert
 } from 'lucide-react';
-import { 
-  GRADIENT_PALETTES, 
-  GradientPalette, 
-  GradientMode, 
-  applyGradientsToSubtitles, 
+import {
+  GRADIENT_PALETTES,
+  GradientMode,
+  applyGradientsToSubtitles,
   removeAllGradientsFromSubtitles,
   generateFormattedSRT,
   generateASS,
   generateWebVTT,
   generateCleanSRT,
-  hasFormatting
+  hasFormatting,
 } from '../utils/subtitleFormatter';
 import { SubtitleItem } from '../utils/srtParser';
 import { cn } from '../utils/cn';
+import { InfoPopover } from './InfoPopover';
 
 interface SubtitleStylizerModalProps {
   isOpen: boolean;
@@ -48,52 +44,44 @@ export const SubtitleStylizerModal: React.FC<SubtitleStylizerModalProps> = ({
   urduFont,
   translatedFontSize,
   fileName,
-  onAddLog
+  onAddLog,
 }) => {
   const [selectedPaletteId, setSelectedPaletteId] = useState<string>('sunset');
   const [gradientMode, setGradientMode] = useState<GradientMode>('block-shift');
   const [targetField, setTargetField] = useState<'translated' | 'original' | 'both'>('translated');
-  const [exportFormat, setExportFormat] = useState<'srt-formatted' | 'ass' | 'vtt' | 'srt-clean'>('srt-formatted');
   const [previewTab, setPreviewTab] = useState<'visual' | 'code'>('visual');
 
   if (!isOpen) return null;
 
-  const selectedPalette = GRADIENT_PALETTES.find(p => p.id === selectedPaletteId) || GRADIENT_PALETTES[0];
-
-  // Generate live sample preview
-  const sampleItems: SubtitleItem[] = subtitles.slice(0, 4).length > 0 
-    ? subtitles.slice(0, 4) 
-    : [
-        { index: 1, startTime: '00:00:01,000', endTime: '00:00:04,000', text: 'Welcome to this cinematic universe', translatedText: 'اس سنیما کی دنیا میں خوش آمدید' },
-        { index: 2, startTime: '00:00:04,500', endTime: '00:00:08,200', text: 'Every dialogue carries deep emotional weight', translatedText: 'ہر بات میں ایک گہرا احساس چھپا ہے' },
-        { index: 3, startTime: '00:00:08,500', endTime: '00:00:12,000', text: 'Notice how the colors shift dynamically', translatedText: 'دیکھیں کہ کس طرح رنگ خود بخود تبدیل ہو رہے ہیں' }
-      ];
+  const selectedPalette = GRADIENT_PALETTES.find((p) => p.id === selectedPaletteId) || GRADIENT_PALETTES[0];
+  const sampleItems: SubtitleItem[] =
+    subtitles.slice(0, 3).length > 0
+      ? subtitles.slice(0, 3)
+      : [
+          { index: 1, startTime: '00:00:01,000', endTime: '00:00:04,000', text: 'Welcome to this cinematic universe', translatedText: 'اس سنیما کی دنیا میں خوش آمدید' },
+          { index: 2, startTime: '00:00:04,500', endTime: '00:00:08,200', text: 'Every dialogue carries deep emotion', translatedText: 'ہر بات میں ایک گہرا احساس چھپا ہے' },
+        ];
 
   const styledSampleItems = applyGradientsToSubtitles(sampleItems, selectedPaletteId, gradientMode, targetField);
-
-  // Check how many items currently have formatting
-  const formattedCount = subtitles.filter(s => hasFormatting(s.translatedText || '') || hasFormatting(s.text)).length;
+  const formattedCount = subtitles.filter((s) => hasFormatting(s.translatedText || '') || hasFormatting(s.text)).length;
 
   const handleApplyToAll = () => {
     if (subtitles.length === 0) return;
     const styled = applyGradientsToSubtitles(subtitles, selectedPaletteId, gradientMode, targetField);
     onApply(styled);
-    onAddLog(`Applied "${selectedPalette.name}" (${gradientMode}) gradient styles to ${subtitles.length} subtitles.`, 'success');
+    onAddLog(`Applied "${selectedPalette.name}" (${gradientMode}) to ${subtitles.length} subtitles.`, 'success');
     onClose();
   };
 
   const handleClearAll = () => {
     if (subtitles.length === 0) return;
-    const clean = removeAllGradientsFromSubtitles(subtitles);
-    onApply(clean);
-    onAddLog(`Removed all color formatting and restored clean plain subtitles.`, 'info');
+    onApply(removeAllGradientsFromSubtitles(subtitles));
+    onAddLog('Removed formatting from subtitles.', 'info');
     onClose();
   };
 
   const handleDirectDownload = (format: 'srt-formatted' | 'ass' | 'vtt' | 'srt-clean') => {
     if (subtitles.length === 0) return;
-
-    // Apply currently selected styling if subtitles don't have formatting yet
     let itemsToExport = subtitles;
     if (format !== 'srt-clean' && formattedCount === 0) {
       itemsToExport = applyGradientsToSubtitles(subtitles, selectedPaletteId, gradientMode, targetField);
@@ -111,12 +99,7 @@ export const SubtitleStylizerModal: React.FC<SubtitleStylizerModalProps> = ({
       mimeType = 'text/srt;charset=utf-8';
       fileExt = 'srt';
     } else if (format === 'ass') {
-      content = generateASS(itemsToExport, {
-        fontFamily: urduFont,
-        fontSize: translatedFontSize || 38,
-        title: baseName,
-        palette: selectedPalette
-      });
+      content = generateASS(itemsToExport, { fontFamily: urduFont, fontSize: translatedFontSize || 38, title: baseName, palette: selectedPalette });
       mimeType = 'text/x-ssa;charset=utf-8';
       fileExt = 'ass';
     } else if (format === 'vtt') {
@@ -132,390 +115,233 @@ export const SubtitleStylizerModal: React.FC<SubtitleStylizerModalProps> = ({
     const blob = new Blob(['\ufeff' + content], { type: mimeType });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.style.display = 'none';
     a.href = url;
     a.download = `${baseName}_${format}_${timestamp}.${fileExt}`;
     document.body.appendChild(a);
     a.click();
-
     setTimeout(() => {
       if (document.body.contains(a)) document.body.removeChild(a);
       URL.revokeObjectURL(url);
     }, 20000);
-
-    onAddLog(`Saved stylized subtitles as .${fileExt}: ${a.download}`, 'success');
+    onAddLog(`Saved stylized .${fileExt}`, 'success');
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl max-w-4xl w-full max-h-[92vh] flex flex-col overflow-hidden">
-        
-        {/* Header */}
-        <div className="p-5 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between bg-zinc-50/50 dark:bg-zinc-800/40 shrink-0">
-          <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-xl bg-gradient-to-tr from-amber-500 via-rose-500 to-indigo-500 text-white shadow-md">
-              <Sparkles size={18} />
-            </div>
-            <div>
-              <h2 className="text-base font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
-                Automatic Color Gradients & Subtitle Stylizer
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300 font-bold">
-                  SRT + ASS + VTT
-                </span>
-              </h2>
-              <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                Apply vibrant multi-color gradients across subtitle blocks and save formatted subtitles without losing styling.
-              </p>
-            </div>
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-2.5 sm:p-4 bg-black/75 backdrop-blur-sm">
+      <div
+        className="border rounded-xl shadow-2xl max-w-[calc(100vw-20px)] sm:max-w-4xl w-full max-h-[calc(100dvh-20px)] flex flex-col overflow-hidden text-xs"
+        style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)', color: 'var(--theme-text)' }}
+      >
+        <div
+          className="px-3.5 py-2.5 border-b flex items-center justify-between shrink-0"
+          style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+        >
+          <div className="flex items-center gap-2">
+            <Palette size={15} style={{ color: 'var(--theme-accent)' }} />
+            <h2 className="text-sm font-semibold">Quick Gradient Stylizer</h2>
+            <InfoPopover
+              title="Gradient Stylizer"
+              description="Apply designer gradient palettes across SRT, ASS, and VTT subtitles."
+            />
           </div>
-          <button 
-            onClick={onClose}
-            className="p-2 rounded-xl text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
-          >
-            <X size={18} />
+          <button type="button" onClick={onClose} className="p-1.5 rounded-lg opacity-60 hover:opacity-100 cursor-pointer">
+            <X size={16} />
           </button>
         </div>
 
-        {/* Content Body */}
-        <div className="p-5 overflow-y-auto space-y-6 flex-1 text-xs">
-          
-          {/* Section 1: Palette Selection */}
-          <div>
-            <div className="flex items-center justify-between mb-2.5">
-              <label className="font-bold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
-                <Palette size={14} className="text-amber-500" />
-                1. Select Designer Gradient Palette
-              </label>
-              <span className="text-zinc-400 font-mono text-[10px]">{GRADIENT_PALETTES.length} Presets Available</span>
-            </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
-              {GRADIENT_PALETTES.map((palette) => {
-                const isSelected = selectedPaletteId === palette.id;
-                return (
-                  <button
-                    key={palette.id}
-                    type="button"
-                    onClick={() => setSelectedPaletteId(palette.id)}
-                    className={cn(
-                      "p-3 rounded-xl border text-left transition-all flex flex-col justify-between gap-2 relative overflow-hidden group cursor-pointer",
-                      isSelected
-                        ? "border-emerald-500 ring-2 ring-emerald-500/20 bg-emerald-50/20 dark:bg-emerald-950/20 shadow-sm"
-                        : "border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700 bg-zinc-50/40 dark:bg-zinc-900/40"
-                    )}
-                  >
-                    <div 
-                      className="h-3.5 w-full rounded-md shadow-inner transition-transform group-hover:scale-105"
-                      style={{ background: palette.previewCss }}
-                    />
-                    <div>
-                      <div className="font-bold text-zinc-900 dark:text-zinc-100 truncate text-[11px]">{palette.name}</div>
-                      <div className="text-[9px] text-zinc-500 dark:text-zinc-400 line-clamp-1">{palette.description}</div>
-                    </div>
-                    {isSelected && (
-                      <div className="absolute top-2 right-2 w-4 h-4 rounded-full bg-emerald-500 text-white flex items-center justify-center">
-                        <Check size={10} strokeWidth={3} />
-                      </div>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
+        <div className="p-3.5 overflow-y-auto space-y-4 flex-1">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+            {GRADIENT_PALETTES.map((palette) => {
+              const isSelected = selectedPaletteId === palette.id;
+              return (
+                <button
+                  key={palette.id}
+                  type="button"
+                  onClick={() => setSelectedPaletteId(palette.id)}
+                  className="p-2.5 rounded-lg border text-left flex flex-col gap-1.5 relative cursor-pointer"
+                  style={{
+                    backgroundColor: isSelected ? 'color-mix(in srgb, var(--theme-accent) 10%, var(--theme-surface))' : 'var(--theme-elevated)',
+                    borderColor: isSelected ? 'var(--theme-accent)' : 'var(--theme-border)',
+                  }}
+                >
+                  <div className="h-3 w-full rounded" style={{ background: palette.previewCss }} />
+                  <div className="font-semibold text-[11px] truncate">{palette.name}</div>
+                  {isSelected && <Check size={12} className="absolute top-1.5 right-1.5" style={{ color: 'var(--theme-accent)' }} />}
+                </button>
+              );
+            })}
           </div>
 
-          {/* Section 2: Mode & Target */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            
-            {/* Gradient Mode */}
-            <div className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/30 dark:bg-zinc-800/20 space-y-2">
-              <label className="font-bold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider text-[10px] flex items-center gap-1.5">
-                <Sliders size={13} className="text-indigo-500" />
-                2. Gradient Progression Mode
-              </label>
-              
-              <div className="space-y-1.5">
-                {[
-                  {
-                    id: 'block-shift' as GradientMode,
-                    title: 'Block-by-Block Continuous Shift',
-                    desc: 'Each subtitle block shifts color along the timeline gradient. (Most cinematic)'
-                  },
-                  {
-                    id: 'word-gradient' as GradientMode,
-                    title: 'Smooth Word-by-Word Gradient',
-                    desc: 'Words within each dialogue block transition seamlessly across colors.'
-                  },
-                  {
-                    id: 'alternating-speakers' as GradientMode,
-                    title: 'Alternating Speaker Palette',
-                    desc: 'Alternates contrasting palette tones between consecutive dialogue segments.'
-                  },
-                  {
-                    id: 'ping-pong' as GradientMode,
-                    title: 'Ping-Pong Reversal',
-                    desc: 'Oscillates forward then backward through colors across timeline.'
-                  },
-                  {
-                    id: 'first-last-accent' as GradientMode,
-                    title: 'Anchor Accent Ends',
-                    desc: 'First and last words accented with vibrant ends of palette.'
-                  },
-                  {
-                    id: 'center-out' as GradientMode,
-                    title: 'Center-Out Flare',
-                    desc: 'Center climax word radiates outward to edge stops.'
-                  },
-                  {
-                    id: 'odd-even-words' as GradientMode,
-                    title: 'Odd/Even Word Stride',
-                    desc: 'Alternates color on every other word in each phrase.'
-                  },
-                  {
-                    id: 'random-scatter' as GradientMode,
-                    title: 'Chromatic Scatter',
-                    desc: 'Deterministic multi-color scatter across each phrase.'
-                  },
-                  {
-                    id: 'rainbow-cycle' as GradientMode,
-                    title: 'Spectral Loop',
-                    desc: 'Full palette looped continuously across all words.'
-                  },
-                  {
-                    id: 'tri-color-split' as GradientMode,
-                    title: 'Tri-Color Narrative Split',
-                    desc: 'Divides line into Opening, Body & Climax thirds.'
-                  },
-                  {
-                    id: 'syllable-karaoke' as GradientMode,
-                    title: 'Karaoke Step Wave',
-                    desc: 'High-contrast vibrant jump highlight on key terms.'
-                  },
-                  {
-                    id: 'gradient-glow' as GradientMode,
-                    title: 'Radiant Accent Glow',
-                    desc: 'Rich chromatic lead tone with radiant accentuation.'
-                  }
-                ].map((m) => (
-                  <label
-                    key={m.id}
-                    className={cn(
-                      "flex items-start gap-2.5 p-2.5 rounded-lg border cursor-pointer transition-colors",
-                      gradientMode === m.id
-                        ? "border-emerald-500/60 bg-emerald-50/40 dark:bg-emerald-950/30 text-emerald-900 dark:text-emerald-100 font-medium"
-                        : "border-zinc-200/70 dark:border-zinc-800 hover:bg-zinc-100/50 dark:hover:bg-zinc-800/40 text-zinc-700 dark:text-zinc-300"
-                    )}
-                  >
-                    <input
-                      type="radio"
-                      name="gradientMode"
-                      checked={gradientMode === m.id}
-                      onChange={() => setGradientMode(m.id)}
-                      className="mt-0.5 accent-emerald-600"
-                    />
-                    <div>
-                      <div className="font-bold text-[11px]">{m.title}</div>
-                      <div className="text-[9.5px] text-zinc-500 dark:text-zinc-400">{m.desc}</div>
-                    </div>
-                  </label>
-                ))}
-              </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="p-3 rounded-xl border space-y-1.5" style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}>
+              <label className="font-semibold text-[11px] block">Progression Mode</label>
+              <select
+                value={gradientMode}
+                onChange={(e) => setGradientMode(e.target.value as GradientMode)}
+                className="w-full p-2 border rounded-lg text-xs"
+                style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)', color: 'var(--theme-text)' }}
+              >
+                <option value="block-shift">Block-by-Block Shift</option>
+                <option value="word-gradient">Word-by-Word Gradient</option>
+                <option value="alternating-speakers">Alternating Speakers</option>
+                <option value="ping-pong">Ping-Pong Reversal</option>
+                <option value="first-last-accent">Anchor Accent Ends</option>
+                <option value="center-out">Center-Out Flare</option>
+                <option value="odd-even-words">Odd/Even Stride</option>
+                <option value="random-scatter">Chromatic Scatter</option>
+                <option value="rainbow-cycle">Spectral Loop</option>
+                <option value="tri-color-split">Tri-Color Split</option>
+                <option value="syllable-karaoke">Karaoke Step</option>
+                <option value="gradient-glow">Radiant Glow</option>
+              </select>
             </div>
 
-            {/* Target Field */}
-            <div className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/30 dark:bg-zinc-800/20 space-y-2">
-              <label className="font-bold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider text-[10px] flex items-center gap-1.5">
-                <Layers size={13} className="text-emerald-500" />
-                3. Target Subtitle Stream
-              </label>
-
-              <div className="grid grid-cols-3 gap-2">
+            <div className="p-3 rounded-xl border space-y-1.5" style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}>
+              <label className="font-semibold text-[11px] block">Target Stream</label>
+              <div className="grid grid-cols-3 gap-1.5">
                 {[
-                  { id: 'translated' as const, label: 'Urdu (Translated)' },
-                  { id: 'original' as const, label: 'English (Original)' },
-                  { id: 'both' as const, label: 'Both Streams' }
+                  { id: 'translated' as const, label: 'AI' },
+                  { id: 'original' as const, label: 'Original' },
+                  { id: 'both' as const, label: 'Both' },
                 ].map((t) => (
                   <button
                     key={t.id}
                     type="button"
                     onClick={() => setTargetField(t.id)}
-                    className={cn(
-                      "p-2.5 rounded-lg border text-center font-bold text-[11px] transition-colors cursor-pointer",
+                    className={cn('py-2 rounded-lg border font-semibold text-[11px] cursor-pointer', targetField === t.id ? 'text-white border-transparent' : 'opacity-75')}
+                    style={
                       targetField === t.id
-                        ? "bg-emerald-600 text-white border-emerald-600 shadow-xs"
-                        : "border-zinc-200 dark:border-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300"
-                    )}
+                        ? { backgroundColor: 'var(--theme-accent)' }
+                        : { backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }
+                    }
                   >
                     {t.label}
                   </button>
                 ))}
               </div>
-
-              {/* Status Info Card */}
-              <div className="mt-3 p-3 rounded-lg bg-zinc-100 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700/60 text-zinc-600 dark:text-zinc-300 space-y-1">
-                <div className="flex items-center gap-1.5 font-bold text-[10.5px]">
-                  <Info size={13} className="text-blue-500 shrink-0" />
-                  <span>How players render stylized subtitles:</span>
-                </div>
-                <p className="text-[10px] leading-relaxed">
-                  <strong>Formatted SRT</strong> uses universal <code className="text-emerald-600 dark:text-emerald-400 font-mono text-[9px]">&lt;font color="#HEX"&gt;</code> tags supported by VLC, PotPlayer, MPV, YouTube, and Premiere.
-                </p>
-                <p className="text-[10px] leading-relaxed">
-                  <strong>ASS (.ass)</strong> embeds custom typography (<span className="font-semibold">{urduFont.split(',')[0].replace(/['"]/g, '')}</span>), drop shadows, and exact RGB color overrides.
-                </p>
-              </div>
             </div>
           </div>
 
-          {/* Section 3: Live Video Subtitle Preview */}
-          <div className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-black text-white space-y-3">
-            <div className="flex items-center justify-between text-zinc-400">
-              <span className="font-bold uppercase tracking-wider text-[10px] flex items-center gap-1.5 text-zinc-300">
-                <Eye size={13} className="text-emerald-400" />
-                Live Video Screen Preview (Simulated Player)
+          <div className="p-3 rounded-xl border bg-black text-white space-y-2" style={{ borderColor: 'var(--theme-border)' }}>
+            <div className="flex items-center justify-between">
+              <span className="text-[10.5px] font-semibold flex items-center gap-1 text-zinc-300">
+                <Eye size={12} style={{ color: 'var(--theme-accent)' }} />
+                <span>Preview</span>
               </span>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1">
                 <button
                   type="button"
                   onClick={() => setPreviewTab('visual')}
-                  className={cn("px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer", previewTab === 'visual' ? "bg-white/20 text-white" : "text-zinc-400 hover:text-white")}
+                  className={cn('px-2 py-0.5 rounded text-[10px] font-semibold cursor-pointer', previewTab === 'visual' ? 'bg-white/20' : 'text-zinc-400')}
                 >
                   Visual
                 </button>
                 <button
                   type="button"
                   onClick={() => setPreviewTab('code')}
-                  className={cn("px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer", previewTab === 'code' ? "bg-white/20 text-white" : "text-zinc-400 hover:text-white")}
+                  className={cn('px-2 py-0.5 rounded text-[10px] font-semibold cursor-pointer', previewTab === 'code' ? 'bg-white/20' : 'text-zinc-400')}
                 >
-                  SRT Code
+                  SRT
                 </button>
               </div>
             </div>
 
             {previewTab === 'visual' ? (
-              <div className="p-6 bg-gradient-to-b from-zinc-950/80 to-zinc-900 border border-zinc-800 rounded-lg flex flex-col items-center justify-center min-h-[140px] text-center gap-3">
-                {styledSampleItems.map((sample, idx) => (
-                  <div key={sample.index} className="space-y-1">
-                    <div 
-                      className="leading-relaxed drop-shadow-[0_2px_4px_rgba(0,0,0,0.95)]"
-                      style={{ 
-                        fontFamily: urduFont,
-                        fontSize: `${Math.max(translatedFontSize, 24)}px`
-                      }}
-                      dir="rtl"
-                      dangerouslySetInnerHTML={{ __html: sample.translatedText || '' }}
-                    />
-                    <div className="text-[11px] font-sans text-zinc-400 opacity-70">
-                      {sample.text}
-                    </div>
-                  </div>
+              <div className="p-4 bg-zinc-950 rounded-lg flex flex-col items-center justify-center min-h-[110px] text-center gap-2">
+                {styledSampleItems.map((sample) => (
+                  <div
+                    key={sample.index}
+                    className="leading-relaxed"
+                    style={{ fontFamily: urduFont, fontSize: `${Math.max(translatedFontSize, 22)}px` }}
+                    dir="rtl"
+                    dangerouslySetInnerHTML={{ __html: sample.translatedText || '' }}
+                  />
                 ))}
               </div>
             ) : (
-              <pre className="p-3 bg-zinc-950 font-mono text-[10px] text-emerald-400 overflow-x-auto rounded border border-zinc-800 max-h-36">
+              <pre className="p-3 bg-zinc-950 font-mono text-[10px] text-emerald-400 overflow-x-auto rounded max-h-32">
                 {generateFormattedSRT(styledSampleItems, 'ai')}
               </pre>
             )}
           </div>
 
-          {/* Section 4: One-Click Formatted Downloads */}
-          <div className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/30 space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="font-bold uppercase tracking-wider text-[10px] text-zinc-700 dark:text-zinc-300 flex items-center gap-1.5">
-                <Download size={13} className="text-emerald-500" />
-                Direct Save Formatted Subtitles (No Loss of Formation)
-              </span>
-              <span className="text-[10px] text-zinc-400">{subtitles.length} Subtitles in Project</span>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
-              <button
-                type="button"
-                onClick={() => handleDirectDownload('srt-formatted')}
-                className="p-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] flex flex-col items-center justify-center gap-1 transition-all shadow-sm cursor-pointer"
-              >
-                <div className="flex items-center gap-1.5">
-                  <Download size={13} />
-                  <span>Formatted SRT</span>
-                </div>
-                <span className="text-[8.5px] opacity-80 font-normal">Colors & HTML preserved</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleDirectDownload('ass')}
-                className="p-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[11px] flex flex-col items-center justify-center gap-1 transition-all shadow-sm cursor-pointer"
-              >
-                <div className="flex items-center gap-1.5">
-                  <Sparkles size={13} />
-                  <span>Advanced ASS</span>
-                </div>
-                <span className="text-[8.5px] opacity-80 font-normal">Urdu font, shadow & outline</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleDirectDownload('vtt')}
-                className="p-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-[11px] flex flex-col items-center justify-center gap-1 transition-all shadow-sm cursor-pointer"
-              >
-                <div className="flex items-center gap-1.5">
-                  <FileCode size={13} />
-                  <span>WebVTT (.vtt)</span>
-                </div>
-                <span className="text-[8.5px] opacity-80 font-normal">Web & HTML5 ready</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleDirectDownload('srt-clean')}
-                className="p-2.5 rounded-xl bg-zinc-700 hover:bg-zinc-800 text-white font-bold text-[11px] flex flex-col items-center justify-center gap-1 transition-all shadow-sm cursor-pointer"
-              >
-                <div className="flex items-center gap-1.5">
-                  <Type size={13} />
-                  <span>Clean SRT</span>
-                </div>
-                <span className="text-[8.5px] opacity-80 font-normal">Raw plain text (no tags)</span>
-              </button>
-            </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+            <button
+              type="button"
+              onClick={() => handleDirectDownload('srt-formatted')}
+              className="py-2 px-3 rounded-lg text-white font-semibold flex items-center justify-center gap-1 cursor-pointer"
+              style={{ backgroundColor: 'var(--theme-accent)' }}
+            >
+              <Download size={12} />
+              <span>SRT</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleDirectDownload('ass')}
+              className="py-2 px-3 rounded-lg border font-semibold flex items-center justify-center gap-1 cursor-pointer"
+              style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+            >
+              <Sparkles size={12} />
+              <span>ASS</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleDirectDownload('vtt')}
+              className="py-2 px-3 rounded-lg border font-semibold flex items-center justify-center gap-1 cursor-pointer"
+              style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+            >
+              <FileCode size={12} />
+              <span>VTT</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleDirectDownload('srt-clean')}
+              className="py-2 px-3 rounded-lg border font-semibold flex items-center justify-center gap-1 cursor-pointer"
+              style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+            >
+              <Type size={12} />
+              <span>Clean SRT</span>
+            </button>
           </div>
-
         </div>
 
-        {/* Footer Actions */}
-        <div className="p-4 border-t border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/40 flex items-center justify-between shrink-0">
-          <div>
-            {formattedCount > 0 ? (
-              <button
-                type="button"
-                onClick={handleClearAll}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 border border-red-200 dark:border-red-900/60 font-bold transition-colors cursor-pointer"
-              >
-                <Trash2 size={13} />
-                <span>Remove All Styling ({formattedCount} stylized)</span>
-              </button>
-            ) : (
-              <span className="text-zinc-400 text-[10px]">No styles currently active on subtitles.</span>
-            )}
-          </div>
+        <div
+          className="px-3.5 py-2.5 border-t flex items-center justify-between gap-2 shrink-0"
+          style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+        >
+          {formattedCount > 0 ? (
+            <button
+              type="button"
+              onClick={handleClearAll}
+              className="px-3 py-1.5 rounded-lg border border-red-500/30 text-red-500 font-semibold flex items-center gap-1 cursor-pointer"
+            >
+              <Trash2 size={12} />
+              <span>Clear ({formattedCount})</span>
+            </button>
+          ) : (
+            <span />
+          )}
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 rounded-xl border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 font-bold transition-colors cursor-pointer"
+              className="px-3.5 py-1.5 rounded-lg border font-medium cursor-pointer"
+              style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
             >
               Cancel
             </button>
             <button
               type="button"
               onClick={handleApplyToAll}
-              className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold flex items-center gap-1.5 shadow-md shadow-emerald-600/20 transition-all cursor-pointer"
+              className="px-4 py-1.5 rounded-lg text-white font-semibold flex items-center gap-1 cursor-pointer"
+              style={{ backgroundColor: 'var(--theme-accent)' }}
             >
-              <Sparkles size={14} />
-              <span>Apply Gradients to All Subtitles</span>
+              <Sparkles size={12} />
+              <span>Apply All</span>
             </button>
           </div>
         </div>
-
       </div>
     </div>
   );

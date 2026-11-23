@@ -255,6 +255,110 @@ export function splitSubtitle(
   return newSubtitles.map((sub, i) => ({ ...sub, index: i + 1 }));
 }
 
+function wrapIntoMaxLines(raw: string, maxCharsPerLine = 42): string[] {
+  const clean = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+  if (!clean) return [];
+  const paragraphs = clean.split('\n').map((l) => l.trim()).filter(Boolean);
+  const lines: string[] = [];
+
+  for (const para of paragraphs) {
+    if (para.length <= maxCharsPerLine) {
+      lines.push(para);
+      continue;
+    }
+    const words = para.split(/\s+/);
+    let current = '';
+    for (const w of words) {
+      const candidate = current ? `${current} ${w}` : w;
+      if (candidate.length <= maxCharsPerLine) {
+        current = candidate;
+      } else {
+        if (current) lines.push(current);
+        current = w;
+      }
+    }
+    if (current) lines.push(current);
+  }
+  return lines;
+}
+
+function chunkLinesIntoBlocks(lines: string[], targetChunks: number): string[] {
+  if (lines.length === 0) return Array(targetChunks).fill('');
+  const result: string[] = [];
+  for (let c = 0; c < targetChunks; c++) {
+    const start = Math.floor((c * lines.length) / targetChunks);
+    const end = Math.floor(((c + 1) * lines.length) / targetChunks);
+    const slice = lines.slice(start, Math.max(start + 1, end));
+    result.push(slice.join('\n').trim());
+  }
+  return result;
+}
+
+/**
+ * Automatically divides all long subtitle blocks into shorter blocks of at most 2 lines each,
+ * recalculating proportional timestamps and re-indexing sequentially.
+ */
+export function splitAllLongSubtitles(
+  subtitles: SubtitleItem[],
+  maxLinesPerBlock = 2,
+  maxCharsPerLine = 42
+): { updatedSubtitles: SubtitleItem[]; splitBlocksCount: number; createdBlocksCount: number } {
+  const output: SubtitleItem[] = [];
+  let splitBlocksCount = 0;
+
+  for (const item of subtitles) {
+    const origLines = wrapIntoMaxLines(item.text || '', maxCharsPerLine);
+    const aiLines = item.translatedText ? wrapIntoMaxLines(item.translatedText, maxCharsPerLine) : [];
+    const googleLines = item.googleTranslateText ? wrapIntoMaxLines(item.googleTranslateText, maxCharsPerLine) : [];
+
+    const maxLineCount = Math.max(origLines.length, aiLines.length, googleLines.length);
+    if (maxLineCount <= maxLinesPerBlock) {
+      output.push(item);
+      continue;
+    }
+
+    splitBlocksCount++;
+    const numChunks = Math.ceil(maxLineCount / maxLinesPerBlock);
+    const origChunks = chunkLinesIntoBlocks(origLines, numChunks);
+    const aiChunks = item.translatedText ? chunkLinesIntoBlocks(aiLines, numChunks) : [];
+    const googleChunks = item.googleTranslateText ? chunkLinesIntoBlocks(googleLines, numChunks) : [];
+
+    const startMs = timeStringToMs(item.startTime);
+    const endMs = timeStringToMs(item.endTime);
+    const totalDur = Math.max(numChunks * 300, endMs - startMs);
+    const weights = origChunks.map((c, idx) => Math.max(1, (c || aiChunks[idx] || googleChunks[idx] || '').length));
+    const totalWeight = weights.reduce((a, b) => a + b, 0);
+
+    let cursorMs = startMs;
+    for (let i = 0; i < numChunks; i++) {
+      const isLast = i === numChunks - 1;
+      const chunkDur = isLast
+        ? Math.max(250, endMs - cursorMs)
+        : Math.max(250, Math.round((weights[i] / totalWeight) * totalDur));
+      const chunkEndMs = isLast ? Math.max(cursorMs + 250, endMs) : Math.min(endMs - (numChunks - 1 - i) * 250, cursorMs + chunkDur);
+
+      output.push({
+        index: output.length + 1,
+        startTime: msToTimeString(cursorMs),
+        endTime: msToTimeString(Math.max(cursorMs + 200, chunkEndMs)),
+        text: origChunks[i] || item.text,
+        translatedText: item.translatedText ? aiChunks[i] || undefined : undefined,
+        googleTranslateText: item.googleTranslateText ? googleChunks[i] || undefined : undefined,
+        styleColor: item.styleColor,
+      });
+
+      cursorMs = Math.max(cursorMs + 200, chunkEndMs) + 40;
+    }
+  }
+
+  const reindexed = output.map((sub, i) => ({ ...sub, index: i + 1 }));
+  return {
+    updatedSubtitles: reindexed,
+    splitBlocksCount,
+    createdBlocksCount: reindexed.length - subtitles.length,
+  };
+}
+
 /**
  * Inserts a new subtitle segment after the specified index or at the end
  */

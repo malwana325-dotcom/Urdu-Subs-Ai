@@ -20,15 +20,12 @@ export const ContextEditorModal: React.FC<ContextEditorModalProps> = ({
   onSave,
   placeholder,
   icon = 'context',
-  onRestoreDefault
+  onRestoreDefault,
 }) => {
   const [localVal, setLocalVal] = useState(value);
 
-  // Sync with prop when opened
   React.useEffect(() => {
-    if (isOpen) {
-      setLocalVal(value);
-    }
+    if (isOpen) setLocalVal(value);
   }, [isOpen, value]);
 
   if (!isOpen) return null;
@@ -39,20 +36,24 @@ export const ContextEditorModal: React.FC<ContextEditorModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl max-w-2xl w-full overflow-hidden flex flex-col text-xs">
-        {/* Header */}
-        <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between bg-zinc-50/70 dark:bg-zinc-800/40">
-          <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-xl bg-emerald-600 text-white shadow-xs">
-              {icon === 'prompt' ? <MessageSquare size={16} /> : <Search size={16} />}
-            </div>
-            <div>
-              <h3 className="font-bold text-zinc-900 dark:text-zinc-100 text-sm">{title}</h3>
-              <p className="text-[10px] text-zinc-500 dark:text-zinc-400">Focused editor window for fine-tuning AI guidance</p>
-            </div>
+    <div className="fixed inset-0 z-[120] flex items-center justify-center p-3 bg-black/75 backdrop-blur-sm">
+      <div
+        className="border rounded-xl shadow-2xl max-w-[calc(100vw-24px)] sm:max-w-2xl w-full max-h-[calc(100dvh-24px)] overflow-hidden flex flex-col text-xs"
+        style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)', color: 'var(--theme-text)' }}
+      >
+        <div
+          className="px-3.5 py-2.5 border-b flex items-center justify-between gap-2"
+          style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            {icon === 'prompt' ? (
+              <MessageSquare size={15} style={{ color: 'var(--theme-accent)' }} />
+            ) : (
+              <Search size={15} style={{ color: 'var(--theme-accent)' }} />
+            )}
+            <h3 className="font-semibold text-sm truncate">{title}</h3>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 shrink-0">
             {onRestoreDefault && (
               <button
                 type="button"
@@ -60,54 +61,53 @@ export const ContextEditorModal: React.FC<ContextEditorModalProps> = ({
                   onRestoreDefault();
                   setLocalVal('Translate naturally for a family drama setting.');
                 }}
-                className="px-2.5 py-1 text-[10px] font-bold text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 flex items-center gap-1 cursor-pointer"
+                className="px-2 py-1 text-[10.5px] font-semibold flex items-center gap-1 cursor-pointer"
+                style={{ color: 'var(--theme-accent)' }}
               >
                 <RotateCcw size={11} />
-                <span>Restore Default</span>
+                <span>Default</span>
               </button>
             )}
-            <button
-              type="button"
-              onClick={onClose}
-              className="p-1 hover:bg-zinc-200 dark:hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
-            >
-              <X size={16} />
+            <button type="button" onClick={onClose} className="p-1.5 rounded-lg opacity-60 hover:opacity-100 cursor-pointer">
+              <X size={15} />
             </button>
           </div>
         </div>
 
-        {/* Textarea */}
-        <div className="p-4">
+        <div className="p-3.5 flex-1 overflow-y-auto">
           <textarea
             value={localVal}
             onChange={(e) => setLocalVal(e.target.value)}
             rows={10}
-            className="w-full p-4 border border-zinc-200 dark:border-zinc-700 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:outline-none resize-y text-zinc-900 dark:text-zinc-100 bg-zinc-50 dark:bg-zinc-850 leading-relaxed text-sm font-sans"
+            className="w-full p-3 border rounded-lg focus:outline-none resize-y leading-relaxed text-sm font-sans"
+            style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)', color: 'var(--theme-text)' }}
             placeholder={placeholder}
             autoFocus
           />
         </div>
 
-        {/* Footer */}
-        <div className="p-3 border-t border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/50 flex items-center justify-between">
-          <span className="text-[10px] text-zinc-400 font-mono">
-            {localVal.length} characters
-          </span>
-          <div className="flex items-center gap-2">
+        <div
+          className="px-3.5 py-2.5 border-t flex items-center justify-between"
+          style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+        >
+          <span className="text-[10.5px] opacity-65 font-mono tabular-nums">{localVal.length} chars</span>
+          <div className="flex items-center gap-1.5">
             <button
               type="button"
               onClick={onClose}
-              className="px-3.5 py-1.5 rounded-xl border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 font-bold transition-all cursor-pointer"
+              className="px-3.5 py-1.5 rounded-lg border font-medium cursor-pointer"
+              style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
             >
               Cancel
             </button>
             <button
               type="button"
               onClick={handleSave}
-              className="px-4 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+              className="px-4 py-1.5 rounded-lg text-white font-semibold flex items-center gap-1 cursor-pointer"
+              style={{ backgroundColor: 'var(--theme-accent)' }}
             >
               <Check size={13} />
-              <span>Apply Changes</span>
+              <span>Apply</span>
             </button>
           </div>
         </div>

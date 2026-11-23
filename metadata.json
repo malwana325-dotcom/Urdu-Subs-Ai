@@ -1,5 +1,6 @@
 {
   "name": "Urdu-Subs Ai",
   "description": "A context-aware subtitle translation tool that uses Gemini AI and web search to generate culturally nuanced Urdu translations.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

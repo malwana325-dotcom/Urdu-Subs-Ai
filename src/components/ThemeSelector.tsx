@@ -1,5 +1,7 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Sun, Moon, Zap, Sparkles, Droplets, Flame, Check, Palette, ChevronDown } from 'lucide-react';
+import { getClampedPopoverStyle } from '../utils/popoverPlacement';
+import { useBodyScrollLock } from '../utils/scrollLock';
 import { cn } from '../utils/cn';
 
 export type AppTheme = 'classic' | 'cinematic' | 'cyber' | 'neon' | 'sapphire' | 'amber';
@@ -7,6 +9,7 @@ export type AppTheme = 'classic' | 'cinematic' | 'cyber' | 'neon' | 'sapphire' |
 export interface ThemeDefinition {
   id: AppTheme;
   name: string;
+  shortName: string;
   category: 'Light' | 'Dark' | 'Special';
   description: string;
   isDark: boolean;
@@ -22,88 +25,94 @@ export interface ThemeDefinition {
 export const APP_THEMES: ThemeDefinition[] = [
   {
     id: 'classic',
-    name: 'Classic Light',
+    name: 'Neutral Studio',
+    shortName: 'Light',
     category: 'Light',
-    description: 'Clean studio aesthetic with emerald accents and crisp slate borders',
+    description: 'Crisp studio white with calm teal accent',
     isDark: false,
     colors: {
-      primary: '#059669',
-      bg: '#f4f4f5',
-      accent: '#10b981',
-      border: '#e4e4e7'
+      primary: '#0d9488',
+      bg: '#f8fafc',
+      accent: '#14b8a6',
+      border: '#e2e8f0',
     },
-    icon: Sun
+    icon: Sun,
   },
   {
     id: 'cinematic',
-    name: 'Cinematic Dark',
+    name: 'Obsidian Cinema',
+    shortName: 'Obsidian',
     category: 'Dark',
-    description: 'Deep zinc charcoal with emerald studio highlights and balanced contrast',
+    description: 'Deep obsidian canvas with studio teal accent',
     isDark: true,
     colors: {
-      primary: '#10b981',
-      bg: '#18181b',
-      accent: '#34d399',
-      border: '#27272a'
+      primary: '#14b8a6',
+      bg: '#090a0d',
+      accent: '#2dd4bf',
+      border: '#222631',
     },
-    icon: Moon
+    icon: Moon,
   },
   {
     id: 'cyber',
-    name: 'Cyberpunk (Cyber)',
+    name: 'Cyber Cyan',
+    shortName: 'Cyber',
     category: 'Special',
-    description: 'Obsidian dark with electric cyan, neon magenta accents, and sci-fi glowing borders',
+    description: 'Carbon dark with crisp electric cyan',
     isDark: true,
     colors: {
-      primary: '#00f0ff',
-      bg: '#07070d',
-      accent: '#ff0055',
-      border: '#00f0ff55'
+      primary: '#06b6d4',
+      bg: '#07090e',
+      accent: '#22d3ee',
+      border: '#164e63',
     },
-    icon: Zap
+    icon: Zap,
   },
   {
     id: 'neon',
-    name: 'Neon Glow (Synthwave)',
+    name: 'Synthwave Dusk',
+    shortName: 'Dusk',
     category: 'Special',
-    description: 'Deep violet-navy with radiant magenta glow, purple aura, and glassy backdrops',
+    description: 'Deep plum dark with muted rose highlight',
     isDark: true,
     colors: {
       primary: '#ec4899',
-      bg: '#0c0a1e',
-      accent: '#a855f7',
-      border: '#ec489955'
+      bg: '#0c0916',
+      accent: '#f472b6',
+      border: '#500724',
     },
-    icon: Sparkles
+    icon: Sparkles,
   },
   {
     id: 'sapphire',
     name: 'Midnight Sapphire',
+    shortName: 'Sapphire',
     category: 'Dark',
-    description: 'Deep oceanic abyss navy with icy cyan & sapphire tones for relaxing night editing',
+    description: 'Oceanic navy slate with icy sky accent',
     isDark: true,
     colors: {
-      primary: '#38bdf8',
-      bg: '#060e1c',
-      accent: '#60a5fa',
-      border: '#1e293b'
+      primary: '#0ea5e9',
+      bg: '#070e1b',
+      accent: '#38bdf8',
+      border: '#1e3a5f',
     },
-    icon: Droplets
+    icon: Droplets,
   },
   {
     id: 'amber',
-    name: 'Sunset Amber',
+    name: 'Warm Espresso',
+    shortName: 'Amber',
     category: 'Special',
-    description: 'Warm espresso with rich golden amber, bronze highlights, and soft cinema warmth',
+    description: 'Warm espresso dark with soft cinema gold',
     isDark: true,
     colors: {
       primary: '#f59e0b',
-      bg: '#120e0a',
+      bg: '#100c08',
       accent: '#fbbf24',
-      border: '#292017'
+      border: '#451a03',
     },
-    icon: Flame
-  }
+    icon: Flame,
+  },
 ];
 
 interface ThemeSelectorProps {
@@ -113,72 +122,114 @@ interface ThemeSelectorProps {
 
 export const ThemeSelector: React.FC<ThemeSelectorProps> = ({ currentTheme, onThemeChange }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
   const containerRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
 
-  const activeTheme = APP_THEMES.find(t => t.id === currentTheme) || APP_THEMES[0];
+  useBodyScrollLock(isOpen);
+
+  const activeTheme = APP_THEMES.find((t) => t.id === currentTheme) || APP_THEMES[0];
   const ActiveIcon = activeTheme.icon;
 
-  // Auto-close on click outside
+  const updateMenuPosition = useCallback(() => {
+    setMenuStyle(getClampedPopoverStyle(buttonRef.current, 264, 380));
+  }, []);
+
   useEffect(() => {
-    const handleOutside = (e: MouseEvent) => {
+    const handleOutside = (e: MouseEvent | TouchEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         setIsOpen(false);
       }
     };
-    document.addEventListener('mousedown', handleOutside);
-    return () => document.removeEventListener('mousedown', handleOutside);
-  }, []);
+    const handleReposition = () => {
+      if (isOpen) updateMenuPosition();
+    };
+    if (isOpen) {
+      updateMenuPosition();
+      document.addEventListener('mousedown', handleOutside);
+      document.addEventListener('touchstart', handleOutside);
+      window.addEventListener('resize', handleReposition);
+      window.addEventListener('scroll', handleReposition, true);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('touchstart', handleOutside);
+      window.removeEventListener('resize', handleReposition);
+      window.removeEventListener('scroll', handleReposition, true);
+    };
+  }, [isOpen, updateMenuPosition]);
 
   return (
     <div ref={containerRef} className="relative shrink-0">
       <button
+        ref={buttonRef}
         type="button"
-        onClick={() => setIsOpen(prev => !prev)}
+        onClick={() => setIsOpen((prev) => !prev)}
         className={cn(
-          "flex items-center gap-2 px-3 py-1.5 rounded-xl border transition-all cursor-pointer shadow-2xs select-none",
-          isOpen
-            ? "bg-zinc-200/80 dark:bg-zinc-700 border-zinc-300 dark:border-zinc-600 shadow-xs"
-            : "bg-zinc-100 hover:bg-zinc-200/70 dark:bg-zinc-800/80 dark:hover:bg-zinc-700/80 border-zinc-200 dark:border-zinc-700"
+          'flex items-center gap-1.5 px-2 min-h-[34px] rounded-lg border transition-colors cursor-pointer select-none touch-tactile',
+          isOpen && 'ring-1 ring-[var(--theme-accent)]'
         )}
-        title={`Current Theme: ${activeTheme.name}. Click to change theme`}
+        style={{
+          backgroundColor: isOpen ? 'var(--theme-elevated)' : 'var(--theme-surface)',
+          borderColor: isOpen ? 'var(--theme-accent)' : 'var(--theme-border)',
+          color: 'var(--theme-text)',
+        }}
+        title={`Theme: ${activeTheme.name}`}
+        aria-label={`Theme: ${activeTheme.name}`}
       >
-        <div 
-          className="w-4 h-4 rounded-full flex items-center justify-center text-white shadow-2xs shrink-0"
+        <span
+          className="w-4 h-4 rounded flex items-center justify-center text-white shrink-0"
           style={{ backgroundColor: activeTheme.colors.primary }}
         >
           <ActiveIcon size={10} className="stroke-[2.5]" />
-        </div>
-        <span className="text-xs font-bold text-zinc-700 dark:text-zinc-200 hidden sm:inline">
-          {activeTheme.name.split(' ')[0]}
         </span>
-        <div className="flex items-center gap-0.5">
-          <span 
-            className="w-2 h-2 rounded-full border border-black/10 dark:border-white/10" 
-            style={{ backgroundColor: activeTheme.colors.accent }} 
-          />
-        </div>
-        <ChevronDown size={12} className={cn("text-zinc-400 transition-transform duration-150", isOpen && "rotate-180")} />
+        <span className="text-[11px] font-semibold hidden sm:inline">
+          {activeTheme.shortName}
+        </span>
+        <ChevronDown
+          size={11}
+          className={cn('opacity-55 transition-transform duration-150', isOpen && 'rotate-180')}
+        />
       </button>
 
       {isOpen && (
-        <div className="absolute right-0 top-full mt-2 w-72 sm:w-80 bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-2xl p-2.5 z-[100] animate-in fade-in zoom-in-95 duration-150 space-y-2">
-          
-          {/* Header */}
-          <div className="px-2.5 py-1.5 flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800">
-            <div className="flex items-center gap-1.5">
-              <Palette size={13} className="text-emerald-600 dark:text-emerald-400" />
-              <span className="text-[10.5px] font-extrabold uppercase tracking-wider text-zinc-800 dark:text-zinc-200">
-                Visual Themes
-              </span>
-            </div>
-            <span className="text-[9.5px] font-mono text-zinc-400 font-bold">
-              {APP_THEMES.length} Presets
+        <>
+          <div
+            className="fixed inset-0 z-[135] bg-black/20 backdrop-blur-[1px] backdrop-touch-lock"
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsOpen(false);
+            }}
+            onTouchStart={(e) => e.stopPropagation()}
+            onTouchMove={(e) => e.stopPropagation()}
+            onWheel={(e) => e.stopPropagation()}
+            aria-hidden="true"
+          />
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              ...menuStyle,
+              backgroundColor: 'var(--theme-surface)',
+              borderColor: 'var(--theme-border)',
+              color: 'var(--theme-text)',
+            }}
+            className="rounded-xl border shadow-xl p-1.5 z-[140] overflow-y-auto space-y-1 mobile-fixed-chrome overscroll-contain"
+          >
+          <div
+            className="px-2 py-1 flex items-center justify-between border-b"
+            style={{ borderColor: 'var(--theme-border)' }}
+          >
+            <span className="text-[10px] font-semibold uppercase tracking-wider opacity-70 flex items-center gap-1.5">
+              <Palette size={12} style={{ color: 'var(--theme-accent)' }} />
+              <span>Theme</span>
+            </span>
+            <span className="text-[10px] font-mono opacity-55 tabular-nums">
+              {APP_THEMES.length}
             </span>
           </div>
 
-          {/* Theme Options Grid */}
-          <div className="space-y-1.5 max-h-[380px] overflow-y-auto pr-1">
-            {APP_THEMES.map(theme => {
+          <div className="space-y-0.5">
+            {APP_THEMES.map((theme) => {
               const isSelected = theme.id === currentTheme;
               const Icon = theme.icon;
 
@@ -190,70 +241,44 @@ export const ThemeSelector: React.FC<ThemeSelectorProps> = ({ currentTheme, onTh
                     onThemeChange(theme.id);
                     setIsOpen(false);
                   }}
-                  className={cn(
-                    "w-full text-left p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-3 group",
-                    isSelected
-                      ? "bg-zinc-100 dark:bg-zinc-800 border-emerald-500/80 dark:border-emerald-400/80 shadow-xs"
-                      : "border-zinc-100 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
-                  )}
+                  className="w-full text-left px-2 py-1.5 rounded-lg border transition-colors cursor-pointer flex items-center justify-between gap-2"
+                  style={{
+                    backgroundColor: isSelected ? 'var(--theme-accent-soft)' : 'transparent',
+                    borderColor: isSelected ? 'var(--theme-accent)' : 'transparent',
+                  }}
                 >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <div 
-                      className="w-7 h-7 rounded-xl flex items-center justify-center text-white shadow-xs shrink-0 transition-transform group-hover:scale-105"
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span
+                      className="w-6 h-6 rounded-md flex items-center justify-center text-white shrink-0"
                       style={{ backgroundColor: theme.colors.primary }}
                     >
-                      <Icon size={14} className="stroke-[2.5]" />
-                    </div>
-
+                      <Icon size={12} className="stroke-[2.5]" />
+                    </span>
                     <div className="min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-xs font-bold text-zinc-800 dark:text-zinc-100 truncate">
-                          {theme.name}
-                        </span>
-                        {theme.category === 'Special' && (
-                          <span className="px-1.5 py-0.2 rounded-full text-[8px] font-extrabold uppercase tracking-tight bg-gradient-to-r from-amber-500/20 to-rose-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30">
-                            Custom
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-[10px] text-zinc-500 dark:text-zinc-400 truncate leading-snug">
-                        {theme.description}
-                      </p>
+                      <span className="text-xs font-semibold truncate block">{theme.name}</span>
+                      <span className="text-[10px] opacity-55 truncate block">{theme.category}</span>
                     </div>
                   </div>
 
-                  {/* Color Swatch & Selected Indicator */}
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex items-center gap-1.5 shrink-0">
                     <div className="flex items-center -space-x-1">
-                      <span 
-                        className="w-3.5 h-3.5 rounded-full ring-2 ring-white dark:ring-zinc-900 shadow-2xs" 
+                      <span
+                        className="w-3 h-3 rounded-full border border-black/15 dark:border-white/20"
                         style={{ backgroundColor: theme.colors.bg }}
-                        title="Background" 
                       />
-                      <span 
-                        className="w-3.5 h-3.5 rounded-full ring-2 ring-white dark:ring-zinc-900 shadow-2xs" 
+                      <span
+                        className="w-3 h-3 rounded-full border border-black/15 dark:border-white/20"
                         style={{ backgroundColor: theme.colors.primary }}
-                        title="Primary" 
-                      />
-                      <span 
-                        className="w-3.5 h-3.5 rounded-full ring-2 ring-white dark:ring-zinc-900 shadow-2xs" 
-                        style={{ backgroundColor: theme.colors.accent }}
-                        title="Accent" 
                       />
                     </div>
-
-                    {isSelected && (
-                      <div className="w-5 h-5 rounded-full bg-emerald-600 text-white flex items-center justify-center shadow-xs">
-                        <Check size={11} className="stroke-[3]" />
-                      </div>
-                    )}
+                    {isSelected && <Check size={13} style={{ color: 'var(--theme-accent)' }} />}
                   </div>
                 </button>
               );
             })}
           </div>
-
-        </div>
+          </div>
+        </>
       )}
     </div>
   );

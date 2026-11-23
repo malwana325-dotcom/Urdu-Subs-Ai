@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { cn } from '../utils/cn';
+import { detectLineDirection } from './FormattedRichText';
 
 interface SubtitleRowEditableCellProps {
   value: string;
@@ -13,16 +14,11 @@ interface SubtitleRowEditableCellProps {
   placeholder?: string;
   displayHtml?: string | null;
   emptyLabel?: string;
+  horizontalGrid?: boolean;
+  onLongPress?: (pos: { x: number; y: number }) => void;
+  editTriggerNonce?: number;
 }
 
-/**
- * Localized Editable Cell Component
- * Implements high-performance localized state management:
- * 1. Halts all background / parent rerendering while typing:
- *    Keeps active keystrokes in fast local component memory (`draftValue`).
- * 2. Only commits to global state when exiting (onBlur) or pressing Enter (with Shift+Enter for newline).
- * 3. Shows stylized displayHtml when not actively focused.
- */
 export const SubtitleRowEditableCell: React.FC<SubtitleRowEditableCellProps> = ({
   value,
   isReadOnly,
@@ -34,18 +30,86 @@ export const SubtitleRowEditableCell: React.FC<SubtitleRowEditableCellProps> = (
   style,
   placeholder,
   displayHtml,
-  emptyLabel
+  emptyLabel,
+  horizontalGrid = true,
+  onLongPress,
+  editTriggerNonce,
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [draftValue, setDraftValue] = useState(value);
   const isTypingRef = useRef(false);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
+  const justLongPressedRef = useRef(false);
+  const lastEditTriggerRef = useRef<number | undefined>(editTriggerNonce);
 
-  // Sync draft value only when not actively editing/typing
   useEffect(() => {
     if (!isTypingRef.current) {
       setDraftValue(value);
     }
   }, [value]);
+
+  useEffect(() => {
+    if (
+      editTriggerNonce !== undefined &&
+      editTriggerNonce !== lastEditTriggerRef.current
+    ) {
+      lastEditTriggerRef.current = editTriggerNonce;
+      if (!isReadOnly) {
+        setIsEditing(true);
+      }
+    }
+  }, [editTriggerNonce, isReadOnly]);
+
+  useEffect(() => {
+    return () => {
+      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+    };
+  }, []);
+
+  const clearLongPressTimer = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    touchStartPosRef.current = null;
+  };
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (!onLongPress) return;
+    const t = e.touches[0];
+    if (!t) return;
+    justLongPressedRef.current = false;
+    touchStartPosRef.current = { x: t.clientX, y: t.clientY };
+    const pos = { x: t.clientX, y: t.clientY };
+    longPressTimerRef.current = setTimeout(() => {
+      justLongPressedRef.current = true;
+      longPressTimerRef.current = null;
+      onLongPress(pos);
+    }, 450);
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (!touchStartPosRef.current || !longPressTimerRef.current) return;
+    const t = e.touches[0];
+    if (!t) return;
+    const dx = Math.abs(t.clientX - touchStartPosRef.current.x);
+    const dy = Math.abs(t.clientY - touchStartPosRef.current.y);
+    if (dx > 8 || dy > 8) {
+      clearLongPressTimer();
+    }
+  };
+
+  const handleTouchEnd = () => {
+    clearLongPressTimer();
+  };
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    if (!onLongPress) return;
+    e.preventDefault();
+    e.stopPropagation();
+    onLongPress({ x: e.clientX, y: e.clientY });
+  };
 
   const handleBlur = () => {
     isTypingRef.current = false;
@@ -75,51 +139,131 @@ export const SubtitleRowEditableCell: React.FC<SubtitleRowEditableCellProps> = (
     setDraftValue(e.target.value);
   };
 
+  const activeText = isEditing ? draftValue : value || '';
+  const detectedDominantDir: 'rtl' | 'ltr' =
+    dir === 'rtl' || dir === 'ltr'
+      ? dir
+      : detectLineDirection(activeText);
+
+  const lines = activeText.split('\n');
+  const longestLineChars = lines.reduce((m, l) => Math.max(m, l.length), 0);
+  const dynamicBoxWidthPx = Math.min(720, Math.max(220, Math.round(longestLineChars * (fontSize * 0.62)) + 34));
+  // 3-line fixed box height with internal scrolling
+  const threeLineFixedHeight = `${Math.round(fontSize * 1.55 * 3 + 14)}px`;
+
+  const renderAlignedPlainText = (raw: string) => {
+    const rawLines = raw.split('\n');
+    if (rawLines.length <= 1) {
+      const singleDir = dir === 'rtl' || dir === 'ltr' ? dir : detectLineDirection(raw);
+      return (
+        <span
+          dir={singleDir}
+          className={cn('block w-full', singleDir === 'rtl' ? 'text-right' : 'text-left')}
+        >
+          {raw}
+        </span>
+      );
+    }
+    return rawLines.map((line, idx) => {
+      const lineDir = dir === 'rtl' || dir === 'ltr' ? dir : detectLineDirection(line);
+      return (
+        <span
+          key={idx}
+          dir={lineDir}
+          className={cn('block w-full', lineDir === 'rtl' ? 'text-right' : 'text-left')}
+        >
+          {line || '\u00A0'}
+        </span>
+      );
+    });
+  };
+
   if (isReadOnly) {
     return (
       <div
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        onTouchCancel={handleTouchEnd}
+        onContextMenu={handleContextMenu}
         className={cn(
-          "w-full leading-[2.3] select-text break-words whitespace-pre-line text-zinc-900 dark:text-zinc-100 transition-all",
+          'select-text transition-colors ws-2line-clamp whitespace-pre-wrap break-words w-full block',
+          detectedDominantDir === 'rtl' ? 'text-right' : 'text-left',
+          horizontalGrid ? 'min-w-[200px] max-w-[680px]' : '',
           className
         )}
         style={{
           fontSize: `${fontSize}px`,
           fontFamily,
-          ...style
+          color: 'var(--theme-text)',
+          ...style,
         }}
-        dir={dir}
+        dir={detectedDominantDir}
         dangerouslySetInnerHTML={displayHtml ? { __html: displayHtml } : undefined}
       >
-        {!displayHtml ? (value || <span className="text-zinc-400 dark:text-zinc-600 italic text-xs font-sans">{emptyLabel || 'No text'}</span>) : undefined}
+        {!displayHtml
+          ? value
+            ? renderAlignedPlainText(value)
+            : (
+              <span
+                className={cn(
+                  'opacity-45 text-[11px] font-sans block w-full',
+                  detectedDominantDir === 'rtl' ? 'text-right' : 'text-left'
+                )}
+              >
+                {emptyLabel || '—'}
+              </span>
+            )
+          : undefined}
       </div>
     );
   }
 
-  // When editing is unlocked:
   if (isEditing) {
     return (
-      <div className="relative w-full">
+      <div
+        className="relative w-full"
+        style={horizontalGrid ? { minWidth: `${dynamicBoxWidthPx}px`, maxWidth: '720px' } : { width: '100%' }}
+      >
         <textarea
           autoFocus
-          rows={2}
+          rows={3}
+          wrap="off"
           value={draftValue}
           onChange={handleChange}
           onBlur={handleBlur}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
-          dir={dir}
+          dir={detectedDominantDir}
           className={cn(
-            "w-full leading-[2.3] p-2 bg-white dark:bg-zinc-900 border-2 border-emerald-500 dark:border-emerald-400 rounded-xl shadow-lg resize-y focus:outline-none text-zinc-900 dark:text-zinc-100 transition-all",
+            'w-full leading-[1.55] px-1.5 py-1 border rounded-lg resize-none overflow-x-auto overflow-y-auto overscroll-auto focus:outline-none transition-[width,border-color]',
+            detectedDominantDir === 'rtl' ? 'text-right' : 'text-left',
             className
           )}
           style={{
             fontSize: `${fontSize}px`,
             fontFamily,
-            minHeight: '64px'
+            height: threeLineFixedHeight,
+            minHeight: threeLineFixedHeight,
+            maxHeight: threeLineFixedHeight,
+            backgroundColor: 'var(--theme-elevated)',
+            borderColor: 'var(--theme-accent)',
+            color: 'var(--theme-text)',
+            touchAction: 'pan-x pan-y',
           }}
         />
-        <div className="absolute right-2 bottom-2 text-[8px] font-mono font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/80 px-1.5 py-0.5 rounded border border-emerald-300 dark:border-emerald-800 pointer-events-none shadow-2xs">
-          Press Enter or click away to save
+        <div
+          className={cn(
+            'absolute bottom-1 text-[8px] font-mono font-semibold px-1 py-0.5 rounded border pointer-events-none',
+            detectedDominantDir === 'rtl' ? 'left-1.5' : 'right-1.5'
+          )}
+          style={{
+            backgroundColor: 'var(--theme-surface)',
+            borderColor: 'var(--theme-border)',
+            color: 'var(--theme-accent)',
+          }}
+        >
+          ↵ Save
         </div>
       </div>
     );
@@ -127,23 +271,50 @@ export const SubtitleRowEditableCell: React.FC<SubtitleRowEditableCellProps> = (
 
   return (
     <div
-      onClick={() => setIsEditing(true)}
-      title="Click to edit directly in workspace"
+      onClick={() => {
+        if (justLongPressedRef.current) {
+          justLongPressedRef.current = false;
+          return;
+        }
+        setIsEditing(true);
+      }}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      onTouchCancel={handleTouchEnd}
+      onContextMenu={handleContextMenu}
+      title="Tap to edit · Long-press for actions"
       className={cn(
-        "group/editable w-full leading-[2.3] select-text break-words whitespace-pre-line text-zinc-900 dark:text-zinc-100 transition-all cursor-text rounded-lg p-1.5 -m-1.5 hover:bg-emerald-50/50 dark:hover:bg-emerald-950/30 hover:ring-1 hover:ring-emerald-400/50",
+        'select-text transition-colors cursor-text rounded-md py-0.5 hover:ring-1 hover:ring-[var(--theme-accent)] ws-2line-clamp whitespace-pre-wrap break-words w-full block',
+        detectedDominantDir === 'rtl' ? 'text-right' : 'text-left',
+        horizontalGrid ? 'min-w-[200px] max-w-[680px]' : '',
         className
       )}
       style={{
         fontSize: `${fontSize}px`,
         fontFamily,
-        ...style
+        color: 'var(--theme-text)',
+        ...style,
       }}
-      dir={dir}
+      dir={detectedDominantDir}
     >
       {displayHtml ? (
-        <div dangerouslySetInnerHTML={{ __html: displayHtml }} />
+        <div
+          dir={detectedDominantDir}
+          className={cn('w-full block', detectedDominantDir === 'rtl' ? 'text-right' : 'text-left')}
+          dangerouslySetInnerHTML={{ __html: displayHtml }}
+        />
+      ) : value ? (
+        renderAlignedPlainText(value)
       ) : (
-        value || <span className="text-zinc-400 dark:text-zinc-600 italic text-xs font-sans">{emptyLabel || 'Click to enter text...'}</span>
+        <span
+          className={cn(
+            'opacity-45 text-[11px] font-sans block w-full',
+            detectedDominantDir === 'rtl' ? 'text-right' : 'text-left'
+          )}
+        >
+          {emptyLabel || 'Tap to edit'}
+        </span>
       )}
     </div>
   );
