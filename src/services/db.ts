@@ -67,6 +67,7 @@ export interface ProjectDraft {
   subtitleCount: number;
   translatedCount: number;
   googleCount?: number;
+  isCompleted?: boolean;
   tags?: string[];
   subtitles: SubtitleItem[];
   context: string;

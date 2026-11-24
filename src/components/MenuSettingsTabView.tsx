@@ -38,7 +38,17 @@ import {
   Layout,
   Clock,
   Activity,
+  Smartphone,
+  ExternalLink,
+  Wifi,
 } from 'lucide-react';
+import {
+  AndroidPermissionSnapshot,
+  AndroidSaveMode,
+  getAndroidPermissionSnapshot,
+  requestAndroidStoragePermission,
+  openAndroidAppSettings,
+} from '../services/androidNative';
 import {
   AppPreferences,
   ContainerSize,
@@ -227,10 +237,38 @@ export const MenuSettingsTabView: React.FC<MenuSettingsTabViewProps> = ({
     message: string;
     onConfirm: () => void;
   } | null>(null);
+  const [androidPerms, setAndroidPerms] = useState<AndroidPermissionSnapshot | null>(null);
+  const [androidPermMessage, setAndroidPermMessage] = useState<string>('');
+  const [isCheckingPerms, setIsCheckingPerms] = useState(false);
 
   const backupInputRef = useRef<HTMLInputElement>(null);
   const iconUploadRef = useRef<HTMLInputElement>(null);
   const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  const refreshAndroidPermissions = async () => {
+    setIsCheckingPerms(true);
+    try {
+      const snap = await getAndroidPermissionSnapshot();
+      setAndroidPerms(snap);
+    } finally {
+      setIsCheckingPerms(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshAndroidPermissions();
+  }, []);
+
+  const handleRequestStoragePerm = async () => {
+    setIsCheckingPerms(true);
+    try {
+      const res = await requestAndroidStoragePermission();
+      setAndroidPermMessage(res.message);
+      await refreshAndroidPermissions();
+    } finally {
+      setIsCheckingPerms(false);
+    }
+  };
 
   useEffect(() => {
     const targetKey =
@@ -1738,7 +1776,156 @@ export const MenuSettingsTabView: React.FC<MenuSettingsTabViewProps> = ({
       ),
     }),
 
-    // 52. Storage Usage & Saved Drafts (when Backup & Storage enabled)
+    // 52. Android Subtitle Export Mode
+    renderSelectRow({
+      id: 'androidSaveMode',
+      title: 'Android Subtitle Export Mode',
+      subtitle: 'How exported subtitles save inside Android APK',
+      icon: Smartphone,
+      value: preferences.androidSaveMode || 'documents',
+      onChange: (val) =>
+        onUpdatePreferences((prev) => ({
+          ...prev,
+          androidSaveMode: val as AndroidSaveMode,
+        })),
+      options: [
+        { value: 'documents', label: 'Documents/UrduLocalizer' },
+        { value: 'documents-and-share', label: 'Documents + Share Sheet' },
+        { value: 'share', label: 'Share / Save-As Only' },
+      ],
+      keywords: 'android export save folder documents share sheet apk',
+    }),
+
+    // 53. Android Storage & File Permissions
+    renderExpandableRow({
+      id: 'androidPermissions',
+      title: 'Android Permissions & File Access',
+      valueLabel: androidPerms
+        ? androidPerms.publicStorage === 'granted'
+          ? 'Storage Granted'
+          : androidPerms.publicStorage === 'scoped'
+          ? 'Scoped Ready'
+          : androidPerms.publicStorage === 'web'
+          ? 'Web Storage'
+          : androidPerms.publicStorage === 'denied'
+          ? 'Denied'
+          : 'Tap to Grant'
+        : 'Checking...',
+      icon: Shield,
+      statusDot:
+        androidPerms?.publicStorage === 'granted' ||
+        androidPerms?.publicStorage === 'scoped' ||
+        androidPerms?.publicStorage === 'web'
+          ? 'green'
+          : 'amber',
+      keywords: 'android permissions storage read write external files srt save load manifest',
+      children: (
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-[11px]">
+            <div className="px-2.5 py-2 rounded-lg border flex items-center justify-between gap-2" style={obsidianSurfaceStyle}>
+              <span className="opacity-70">Subtitle Load / Save</span>
+              <span className="font-mono font-semibold">
+                {androidPerms?.publicStorage === 'granted'
+                  ? 'Granted'
+                  : androidPerms?.publicStorage === 'scoped'
+                  ? 'Scoped Storage'
+                  : androidPerms?.publicStorage === 'web'
+                  ? 'Browser SAF'
+                  : androidPerms?.publicStorage === 'denied'
+                  ? 'Denied'
+                  : 'Prompt'}
+              </span>
+            </div>
+            <div className="px-2.5 py-2 rounded-lg border flex items-center justify-between gap-2" style={obsidianSurfaceStyle}>
+              <span className="opacity-70 flex items-center gap-1">
+                <Wifi size={11} />
+                <span>Network State</span>
+              </span>
+              <span className="font-mono font-semibold">
+                {androidPerms?.networkConnected ? `Online (${androidPerms.networkType})` : 'Offline'}
+              </span>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => { void handleRequestStoragePerm(); }}
+              disabled={isCheckingPerms}
+              className="min-h-[34px] px-3 rounded-lg text-white text-[11px] font-semibold flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 btn-inch-cap"
+              style={{ backgroundColor: 'var(--theme-accent)' }}
+            >
+              {isCheckingPerms ? <Loader2 size={12} className="animate-spin" /> : <Shield size={12} />}
+              <span>{androidPerms?.isNativeAndroid ? 'Grant Storage Access' : 'Verify File Access'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => { void refreshAndroidPermissions(); }}
+              disabled={isCheckingPerms}
+              className="min-h-[34px] px-2.5 rounded-lg border text-[11px] font-semibold flex items-center justify-center gap-1 cursor-pointer btn-inch-cap"
+              style={obsidianSurfaceStyle}
+            >
+              <RotateCcw size={11} />
+              <span>Recheck</span>
+            </button>
+
+            {androidPerms?.canOpenAppSettings && (
+              <button
+                type="button"
+                onClick={() => openAndroidAppSettings()}
+                className="min-h-[34px] px-2.5 rounded-lg border text-[11px] font-semibold flex items-center justify-center gap-1 cursor-pointer btn-inch-cap"
+                style={obsidianSurfaceStyle}
+              >
+                <ExternalLink size={11} style={{ color: 'var(--theme-accent)' }} />
+                <span>Android Settings</span>
+              </button>
+            )}
+          </div>
+
+          {androidPermMessage && (
+            <p className="text-[10.5px] opacity-80 leading-snug">{androidPermMessage}</p>
+          )}
+          <p className="text-[10px] opacity-55 leading-snug">
+            Manifest permissions: INTERNET, ACCESS_NETWORK_STATE, WAKE_LOCK, READ/WRITE_EXTERNAL_STORAGE (scoped API 24–36) &amp; FileProvider Share.
+          </p>
+        </>
+      ),
+    }),
+
+    // 54. Android Build & Intent Support
+    renderExpandableRow({
+      id: 'androidBuildInfo',
+      title: 'Android App & Intent Support',
+      valueLabel: androidPerms?.isNativeAndroid
+        ? `APK v${androidPerms.appVersion}${androidPerms.sdkInt ? ` · API ${androidPerms.sdkInt}` : ''}`
+        : 'Web / PWA Ready',
+      icon: Smartphone,
+      keywords: 'android package manifest intent open with srt vtt ass back button',
+      children: (
+        <div className="space-y-1.5 text-[10.5px]">
+          <div className="grid grid-cols-2 gap-1.5">
+            <div className="px-2.5 py-1.5 rounded-lg border" style={obsidianSurfaceStyle}>
+              <span className="opacity-60 block text-[9.5px]">Package ID</span>
+              <span className="font-mono font-semibold">com.urdudubber.app</span>
+            </div>
+            <div className="px-2.5 py-1.5 rounded-lg border" style={obsidianSurfaceStyle}>
+              <span className="opacity-60 block text-[9.5px]">Runtime Platform</span>
+              <span className="font-mono font-semibold">
+                {androidPerms?.isNativeAndroid
+                  ? `Android Native${androidPerms.sdkInt ? ` (API ${androidPerms.sdkInt})` : ''}`
+                  : 'Browser / PWA'}
+              </span>
+            </div>
+          </div>
+          <p className="opacity-65 leading-snug">
+            Supports Open With &amp; Share intents (.srt, .vtt, .ass, .ssa, .sbv, .lrc), hardware Back navigation, adjustResize editor keyboard, and HTTPS-enforced network security.
+          </p>
+        </div>
+      ),
+    }),
+
+    // 55. Storage Usage & Saved Drafts (when Backup & Storage enabled)
     ...(preferences.menuVisibility.showBackupSection
       ? [
           renderExpandableRow({

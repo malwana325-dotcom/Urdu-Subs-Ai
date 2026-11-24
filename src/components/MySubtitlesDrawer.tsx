@@ -13,6 +13,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { dbService, StoredSubtitleFile } from '../services/db';
+import { isNativeAndroid } from '../services/androidNative';
 import { InfoPopover } from './InfoPopover';
 import { RightEdgeDrawerShell } from './RightEdgeDrawerShell';
 import { cn } from '../utils/cn';
@@ -410,7 +411,11 @@ export const MySubtitlesDrawer: React.FC<MySubtitlesDrawerProps> = ({
             ref={multiFileInputRef}
             type="file"
             multiple
-            accept=".srt,.vtt,.ass,.ssa,.sbv,.lrc,.json,.txt,text/vtt,text/plain,application/json"
+            accept={
+              isNativeAndroid()
+                ? '*/*'
+                : '.srt,.vtt,.ass,.ssa,.sbv,.lrc,.json,.txt,text/vtt,text/plain,application/json,application/x-subrip'
+            }
             onChange={(e) => {
               handleFilesSelected(e.target.files, false);
               e.target.value = '';

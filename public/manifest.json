@@ -1,14 +1,14 @@
 {
   "id": "/",
-  "name": "Urdu Dubber - Mobile Subtitle Studio",
-  "short_name": "Urdu Dubber",
+  "name": "Urdu Localizer - Mobile Subtitle Studio",
+  "short_name": "Urdu Localizer",
   "description": "Mobile and native subtitle localizer for Android. High-speed local editing with Gemini AI and Google Translate.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#09090b",
-  "theme_color": "#059669",
+  "background_color": "#090a0d",
+  "theme_color": "#090a0d",
   "icons": [
     {
       "src": "https://cdn-icons-png.flaticon.com/512/1087/1087815.png",

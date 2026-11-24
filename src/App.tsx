@@ -197,6 +197,13 @@ import {
   clampZoom,
   paddingToContainerSize,
 } from './services/appPreferences';
+import {
+  AndroidSaveMode,
+  isNativeAndroid,
+  exportSubtitleNativeAndroid,
+  initAndroidNativeShell,
+  syncAndroidStatusBarTheme,
+} from './services/androidNative';
 import { SubtitleRowEditableCell } from './components/SubtitleRowEditableCell';
 
 function cn(...inputs: ClassValue[]) {
@@ -1310,6 +1317,20 @@ export default function App() {
   const [glossary, setGlossary] = useState<GlossaryEntry[]>(() => loadGlossary());
   const [drafts, setDrafts] = useState<ProjectDraft[]>([]);
   const [activeDraftId, setActiveDraftId] = useState<string | null>(null);
+  const draftsRef = useRef(drafts);
+  draftsRef.current = drafts;
+  const activeDraftIdRef = useRef(activeDraftId);
+  activeDraftIdRef.current = activeDraftId;
+  const fileNameRef = useRef(fileName);
+  fileNameRef.current = fileName;
+  const detectedFormatRef = useRef(detectedFormat);
+  detectedFormatRef.current = detectedFormat;
+  const contextRef = useRef(context);
+  contextRef.current = context;
+  const customPromptRef = useRef(customPrompt);
+  customPromptRef.current = customPrompt;
+  const activeStylingConfigRef = useRef(activeStylingConfig);
+  activeStylingConfigRef.current = activeStylingConfig;
   const [crashSnapshot, setCrashSnapshot] = useState<CrashSnapshot | null>(null);
   const [storageBreakdown, setStorageBreakdown] = useState<DetailedStorageBreakdown>({
     draftsCount: 0,
@@ -1685,7 +1706,192 @@ export default function App() {
     setStreamHistoryVersion(v => v + 1);
   }, []);
 
-  const loadSampleSubtitles = useCallback(() => {
+  const geminiRef = useRef<GeminiService | null>(null);
+  const stopGeminiRef = useRef(false);
+  const stopGoogleRef = useRef(false);
+  const geminiAbortControllerRef = useRef<AbortController | null>(null);
+  const googleAbortControllerRef = useRef<AbortController | null>(null);
+
+  const refreshDraftsAndStats = useCallback(async () => {
+    try {
+      const [loadedDrafts, breakdownData] = await Promise.all([
+        dbService.listDrafts(),
+        dbService.getDetailedStorageBreakdown(),
+      ]);
+      setDrafts(loadedDrafts);
+      setStorageBreakdown(breakdownData);
+    } catch (e) {
+      console.error('Failed to refresh drafts/stats', e);
+    }
+  }, []);
+
+  const buildDraftPayload = useCallback(
+    (
+      subs: SubtitleItem[],
+      opts: {
+        id?: string;
+        title: string;
+        fileName: string;
+        detectedFormat: string;
+        context: string;
+        customPrompt: string;
+        translationSettings: TranslationSettings;
+        activeStylingConfig: ActiveStylingConfig;
+      }
+    ): ProjectDraft => {
+      const totalCount = subs.length;
+      const aiCount = subs.filter((s) => Boolean(s.translatedText?.trim())).length;
+      const gCount = subs.filter((s) => Boolean(s.googleTranslateText?.trim())).length;
+      const isCompleted = totalCount > 0 && (aiCount === totalCount || gCount === totalCount);
+
+      const tags: string[] = [];
+      if (isCompleted) tags.push('Completed');
+      if (aiCount > 0) tags.push('AI');
+      if (gCount > 0) tags.push('Neutral / Google');
+      const hasBilingual = subs.some(
+        (s) =>
+          s.translatedText &&
+          s.translatedText.includes('\n') &&
+          /[a-zA-Z]/.test(s.translatedText) &&
+          /[\u0600-\u06FF]/.test(s.translatedText)
+      );
+      if (
+        hasBilingual ||
+        opts.translationSettings.scriptMode?.startsWith('bilingual') ||
+        (aiCount > 0 && gCount > 0)
+      ) {
+        tags.push('Bilingual');
+      }
+      if (subs.some((s) => /[\u0600-\u06FF]/.test(s.translatedText || s.googleTranslateText || ''))) {
+        tags.push('Urdu');
+      } else if (
+        subs.some(
+          (s) =>
+            (s.translatedText || s.googleTranslateText) &&
+            /[a-zA-Z]/.test(s.translatedText || s.googleTranslateText || '')
+        )
+      ) {
+        tags.push('Roman');
+      }
+      const fmt = (opts.detectedFormat || 'SRT').split(' ')[0].replace(/[^a-zA-Z0-9.]/g, '');
+      if (fmt && !tags.includes(fmt)) tags.push(fmt);
+
+      return {
+        id: opts.id || `draft-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        title: opts.title,
+        fileName: opts.fileName || `${opts.title}.srt`,
+        detectedFormat: opts.detectedFormat || 'SRT',
+        sourceType: opts.detectedFormat.includes('Online')
+          ? 'url'
+          : opts.detectedFormat.includes('Demo')
+          ? 'demo'
+          : 'local',
+        updatedAt: new Date().toISOString(),
+        subtitleCount: totalCount,
+        translatedCount: aiCount,
+        googleCount: gCount,
+        isCompleted,
+        tags,
+        subtitles: subs,
+        context: opts.context,
+        customPrompt: opts.customPrompt,
+        translationSettings: opts.translationSettings,
+        activeStylingConfig: opts.activeStylingConfig,
+      };
+    },
+    []
+  );
+
+  const autoArchiveCurrentProject = useCallback(
+    async (reason: 'load-new' | 'switch-draft' | 'discard') => {
+      const currentSubs = subtitlesRef.current;
+      if (!currentSubs || currentSubs.length === 0) return;
+
+      const curFileName = fileNameRef.current;
+      const curDetectedFormat = detectedFormatRef.current;
+      const curContext = contextRef.current;
+      const curCustomPrompt = customPromptRef.current;
+      const curDraftId = activeDraftIdRef.current;
+
+      // Skip auto-saving untouched built-in Demo sample
+      if (
+        curDetectedFormat.includes('Demo') &&
+        !curDraftId &&
+        currentSubs.length === DEMO_SAMPLE_SUBTITLES.length &&
+        JSON.stringify(currentSubs) === JSON.stringify(DEMO_SAMPLE_SUBTITLES) &&
+        !curContext
+      ) {
+        return;
+      }
+
+      const existingDraft = curDraftId
+        ? draftsRef.current.find((d) => d.id === curDraftId)
+        : undefined;
+
+      const totalCount = currentSubs.length;
+      const aiCount = currentSubs.filter((s) => Boolean(s.translatedText?.trim())).length;
+      const gCount = currentSubs.filter((s) => Boolean(s.googleTranslateText?.trim())).length;
+      const isCompleted = totalCount > 0 && (aiCount === totalCount || gCount === totalCount);
+
+      const subsJson = JSON.stringify(currentSubs);
+      if (
+        existingDraft &&
+        existingDraft.context === curContext &&
+        existingDraft.customPrompt === curCustomPrompt &&
+        Boolean(existingDraft.isCompleted) === isCompleted &&
+        JSON.stringify(existingDraft.subtitles) === subsJson
+      ) {
+        return;
+      }
+
+      if (!existingDraft) {
+        const duplicate = draftsRef.current.find(
+          (d) =>
+            d.fileName === curFileName &&
+            d.subtitleCount === totalCount &&
+            d.context === curContext &&
+            d.customPrompt === curCustomPrompt &&
+            Boolean(d.isCompleted) === isCompleted &&
+            JSON.stringify(d.subtitles) === subsJson
+        );
+        if (duplicate) return;
+      }
+
+      const title = existingDraft?.title || curFileName || `Project ${new Date().toLocaleTimeString()}`;
+
+      const draft = buildDraftPayload(currentSubs, {
+        id: existingDraft?.id,
+        title,
+        fileName: curFileName || `${title}.srt`,
+        detectedFormat: curDetectedFormat || 'SRT',
+        context: curContext,
+        customPrompt: curCustomPrompt,
+        translationSettings: translationSettingsRef.current,
+        activeStylingConfig: activeStylingConfigRef.current,
+      });
+
+      try {
+        await dbService.saveDraft(draft);
+        await refreshDraftsAndStats();
+        if (isCompleted) {
+          addLog(
+            `Auto-saved completed translation "${title}" to Translated Subtitles (${reason}).`,
+            'success'
+          );
+          addNotification(`Saved completed translation to Translated Subtitles: ${title}`, 'saved');
+        } else {
+          addLog(`Auto-saved progress "${title}" to Drafts (${reason}).`, 'info');
+          addNotification(`Auto-saved progress to Drafts: ${title}`, 'saved');
+        }
+      } catch {
+        addLog(`Failed to auto-save "${title}" before ${reason}.`, 'warning');
+      }
+    },
+    [buildDraftPayload, refreshDraftsAndStats, addLog, addNotification]
+  );
+
+  const loadSampleSubtitles = useCallback(async () => {
+    await autoArchiveCurrentProject('load-new');
     setSubtitles(DEMO_SAMPLE_SUBTITLES);
     historyRef.current = [DEMO_SAMPLE_SUBTITLES];
     historyIndexRef.current = 0;
@@ -1707,26 +1913,7 @@ export default function App() {
     setActiveTab('workspace');
     addLog('Loaded 4 cinematic demo subtitle segments with Original, AI Urdu, and Google translation streams.', 'success');
     addNotification('Loaded demo subtitle project', 'success');
-  }, [addLog, addNotification, resetStreamHistory]);
-
-  const geminiRef = useRef<GeminiService | null>(null);
-  const stopGeminiRef = useRef(false);
-  const stopGoogleRef = useRef(false);
-  const geminiAbortControllerRef = useRef<AbortController | null>(null);
-  const googleAbortControllerRef = useRef<AbortController | null>(null);
-
-  const refreshDraftsAndStats = useCallback(async () => {
-    try {
-      const [loadedDrafts, breakdownData] = await Promise.all([
-        dbService.listDrafts(),
-        dbService.getDetailedStorageBreakdown(),
-      ]);
-      setDrafts(loadedDrafts);
-      setStorageBreakdown(breakdownData);
-    } catch (e) {
-      console.error('Failed to refresh drafts/stats', e);
-    }
-  }, []);
+  }, [autoArchiveCurrentProject, addLog, addNotification, resetStreamHistory]);
 
   // Persistence: Load
   useEffect(() => {
@@ -2525,42 +2712,50 @@ export default function App() {
     addLog(`Cleared original dialogue stream on ${selectedIndices.size} segment(s). Timestamps preserved.`, "info");
   }, [selectedIndices, isReadOnly, updateSubtitles, addNotification, addLog]);
 
+  const processSubtitleContent = async (fileTitle: string, content: string) => {
+    addLog(`File selected: ${fileTitle}`, "info");
+    void ensureGeminiConnected();
+
+    const { items, detectedFormat: detectedFmt } = parseUniversalCaptions(content, fileTitle);
+    if (items.length === 0) {
+      addLog(`Could not parse subtitles from ${fileTitle}. File might be empty or invalid.`, "error");
+      addNotification(`Failed to parse ${fileTitle}`, "error");
+      return;
+    }
+
+    await autoArchiveCurrentProject('load-new');
+
+    setFileName(fileTitle);
+    setSubtitles(items);
+    historyRef.current = [items];
+    historyIndexRef.current = 0;
+    setHistory([items]);
+    setHistoryIndex(0);
+    blockHistoryRef.current.clear();
+    setBlockHistoryVersion(v => v + 1);
+    resetStreamHistory(items);
+    setOriginalTimingMap(createOriginalTimingMap(items));
+    setActiveDraftId(null);
+    setHasAppliedCustomStyle(false);
+    setIsWorkspaceStylingPreview(false);
+    setSelectedIndices(new Set());
+    setDetectedFormat(detectedFmt);
+    setQcFilter('all');
+    dbService.clearCrashSnapshot().catch(() => {});
+    setCrashSnapshot(null);
+    setActiveTab('workspace');
+    addLog(`Successfully loaded ${items.length} entries from ${detectedFmt}.`, "success");
+    addNotification(`Loaded ${items.length} segments (${detectedFmt})`, "success");
+  };
+
+  const processSubtitleContentRef = useRef(processSubtitleContent);
+  processSubtitleContentRef.current = processSubtitleContent;
+
   const processSubtitleFile = async (selectedFile: File) => {
-    setFileName(selectedFile.name);
-    addLog(`File selected: ${selectedFile.name}`, "info");
-    
-    // Auto-connect on upload
-    await ensureGeminiConnected();
-    
     const reader = new FileReader();
-    reader.onload = (event) => {
-      const content = event.target?.result as string;
-      const { items, detectedFormat: detectedFmt } = parseUniversalCaptions(content, selectedFile.name);
-      if (items.length === 0) {
-        addLog(`Could not parse subtitles from ${selectedFile.name}. File might be empty or invalid.`, "error");
-        addNotification(`Failed to parse ${selectedFile.name}`, "error");
-        return;
-      }
-      setSubtitles(items);
-      historyRef.current = [items];
-      historyIndexRef.current = 0;
-      setHistory([items]);
-      setHistoryIndex(0);
-      blockHistoryRef.current.clear();
-      setBlockHistoryVersion(v => v + 1);
-      resetStreamHistory(items);
-      setOriginalTimingMap(createOriginalTimingMap(items));
-      setActiveDraftId(null);
-      setHasAppliedCustomStyle(false);
-      setIsWorkspaceStylingPreview(false);
-      setSelectedIndices(new Set());
-      setDetectedFormat(detectedFmt);
-      setQcFilter('all');
-      dbService.clearCrashSnapshot().catch(() => {});
-      setCrashSnapshot(null);
-      setActiveTab('workspace');
-      addLog(`Successfully loaded ${items.length} entries from ${detectedFmt}.`, "success");
-      addNotification(`Loaded ${items.length} segments (${detectedFmt})`, "success");
+    reader.onload = async (event) => {
+      const content = String(event.target?.result || '');
+      await processSubtitleContent(selectedFile.name, content);
     };
     reader.readAsText(selectedFile);
   };
@@ -2568,8 +2763,9 @@ export default function App() {
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
-      processSubtitleFile(selectedFile);
+      void processSubtitleFile(selectedFile);
     }
+    e.target.value = '';
   };
 
   const analyzeSubtitles = async (): Promise<string | null> => {
@@ -3167,6 +3363,29 @@ export default function App() {
         }
       }
 
+      // Native Capacitor Android export (Documents/UrduLocalizer + FileProvider Share Sheet)
+      if (isNativeAndroid()) {
+        const res = await exportSubtitleNativeAndroid({
+          fileName: outFileName,
+          content,
+          saveMode: preferencesRef.current.androidSaveMode || 'documents',
+        });
+        if (res.success) {
+          const msg = res.savedPath
+            ? res.shared
+              ? `Saved to ${res.savedPath} & opened Share sheet`
+              : `Saved to ${res.savedPath}`
+            : `Exported ${outFileName} via Android Share sheet`;
+          addLog(msg, "success");
+          addNotification(msg, "success");
+        } else {
+          const errMsg = res.error || "Android storage export failed — check Storage permission in Settings.";
+          addLog(errMsg, "error");
+          addNotification(errMsg, "error");
+        }
+        return;
+      }
+
       // If on Android / Mobile and Web Share API is available, try native share sheet
       let sharedViaSystem = false;
       if (typeof navigator !== 'undefined' && navigator.share && navigator.canShare) {
@@ -3176,7 +3395,7 @@ export default function App() {
             await navigator.share({
               files: [testFile],
               title: outFileName,
-              text: `Subtitles exported from Urdu Dubber Mobile`
+              text: `Subtitles exported from Urdu Localizer`
             });
             sharedViaSystem = true;
             addLog(`Shared ${outFileName} via Android system share sheet.`, "success");
@@ -3230,7 +3449,7 @@ export default function App() {
     addLog("Google translation halted immediately.", "warning");
   };
 
-  const downloadSRT = (type: 'ai' | 'google' = 'ai') => {
+  const downloadSRT = async (type: 'ai' | 'google' = 'ai') => {
     const subsToDownload = subtitles.map(s => ({
       ...s,
       translatedText: type === 'ai' ? s.translatedText : s.googleTranslateText
@@ -3246,6 +3465,20 @@ export default function App() {
       const timestamp = Date.now();
       const safeFileName = (fileName || 'subtitles.srt').replace(/[^a-z0-9.]/gi, '_');
       const finalFileName = `${type}_${timestamp}_${safeFileName}`;
+
+      if (isNativeAndroid()) {
+        const res = await exportSubtitleNativeAndroid({
+          fileName: finalFileName,
+          content,
+          saveMode: preferencesRef.current.androidSaveMode || 'documents',
+        });
+        if (res.success) {
+          addNotification(res.savedPath ? `Saved to ${res.savedPath}` : `Exported ${finalFileName}`, "success");
+        } else {
+          addNotification(res.error || "Android export failed", "error");
+        }
+        return;
+      }
 
       // Use Blob with explicit UTF-8 BOM for better compatibility with some editors
       const blob = new Blob(['\ufeff' + content], { type: 'text/srt;charset=utf-8' });
@@ -3276,8 +3509,9 @@ export default function App() {
   };
 
   const resetProject = async () => {
-    // Clears stored project state and resets styling & configurations to defaults
+    // Auto-archive progress to Drafts (or Translated Subtitles if complete) before clearing active workspace
     try {
+      await autoArchiveCurrentProject('discard');
       await Promise.all([dbService.clearState(), dbService.clearCrashSnapshot()]);
       setCrashSnapshot(null);
       setSubtitles([]);
@@ -3305,8 +3539,8 @@ export default function App() {
       setSessionId(`GCS-${Math.random().toString(36).substring(2, 15).toUpperCase()}`);
       setSaveStatus('saved');
       refreshDraftsAndStats();
-      addLog("Project discarded and reset to fresh state.", "warning");
-      addNotification("Project discarded and memory reset", "success");
+      addLog("Active workspace cleared after saving progress.", "warning");
+      addNotification("Workspace cleared", "success");
     } catch (e) {
       console.error("Failed to clear state", e);
       addLog("Failed to discard project.", "error");
@@ -3347,6 +3581,7 @@ export default function App() {
       if (items.length === 0) {
         throw new Error('Could not parse any valid subtitle segments from URL response.');
       }
+      await autoArchiveCurrentProject('load-new');
       setSubtitles(items);
       historyRef.current = [items];
       historyIndexRef.current = 0;
@@ -3375,7 +3610,7 @@ export default function App() {
       addLog(`Online URL import failed: ${msg}`, 'error');
       throw new Error(msg);
     }
-  }, [addLog, addNotification, resetStreamHistory]);
+  }, [autoArchiveCurrentProject, addLog, addNotification, resetStreamHistory]);
 
   const handleSaveCurrentAsDraft = useCallback(async (title: string) => {
     if (subtitles.length === 0) {
@@ -3383,52 +3618,15 @@ export default function App() {
       return;
     }
     const cleanTitle = title.trim() || fileName || `Draft ${new Date().toLocaleTimeString()}`;
-    const aiCount = subtitles.filter(s => s.translatedText).length;
-    const gCount = subtitles.filter(s => s.googleTranslateText).length;
-    const tags: string[] = [];
-    if (aiCount > 0) tags.push('AI');
-    if (gCount > 0) tags.push('Neutral / Google');
-    const hasBilingual = subtitles.some(
-      s =>
-        s.translatedText &&
-        s.translatedText.includes('\n') &&
-        /[a-zA-Z]/.test(s.translatedText) &&
-        /[\u0600-\u06FF]/.test(s.translatedText)
-    );
-    if (hasBilingual || translationSettings.scriptMode?.startsWith('bilingual') || (aiCount > 0 && gCount > 0)) {
-      tags.push('Bilingual');
-    }
-    if (subtitles.some(s => /[\u0600-\u06FF]/.test(s.translatedText || s.googleTranslateText || ''))) {
-      tags.push('Urdu');
-    } else if (
-      subtitles.some(
-        s =>
-          (s.translatedText || s.googleTranslateText) &&
-          /[a-zA-Z]/.test(s.translatedText || s.googleTranslateText || '')
-      )
-    ) {
-      tags.push('Roman');
-    }
-    const fmt = (detectedFormat || 'SRT').split(' ')[0].replace(/[^a-zA-Z0-9.]/g, '');
-    if (fmt && !tags.includes(fmt)) tags.push(fmt);
-
-    const draft: ProjectDraft = {
-      id: `draft-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    const draft = buildDraftPayload(subtitles, {
       title: cleanTitle,
       fileName: fileName || `${cleanTitle}.srt`,
       detectedFormat: detectedFormat || 'SRT',
-      sourceType: detectedFormat.includes('Online') ? 'url' : detectedFormat.includes('Demo') ? 'demo' : 'local',
-      updatedAt: new Date().toISOString(),
-      subtitleCount: subtitles.length,
-      translatedCount: aiCount,
-      googleCount: gCount,
-      tags,
-      subtitles,
       context,
       customPrompt,
       translationSettings,
       activeStylingConfig,
-    };
+    });
     try {
       await dbService.saveDraft(draft);
       setActiveDraftId(draft.id);
@@ -3438,9 +3636,12 @@ export default function App() {
     } catch {
       addNotification(`Could not save draft "${cleanTitle}"`, 'not-saved');
     }
-  }, [subtitles, fileName, detectedFormat, context, customPrompt, translationSettings, activeStylingConfig, refreshDraftsAndStats, addLog, addNotification]);
+  }, [subtitles, fileName, detectedFormat, context, customPrompt, translationSettings, activeStylingConfig, buildDraftPayload, refreshDraftsAndStats, addLog, addNotification]);
 
-  const handleLoadDraft = useCallback((draft: ProjectDraft) => {
+  const handleLoadDraft = useCallback(async (draft: ProjectDraft) => {
+    if (draft.id !== activeDraftIdRef.current) {
+      await autoArchiveCurrentProject('switch-draft');
+    }
     blockHistoryRef.current.clear();
     setBlockHistoryVersion(v => v + 1);
     setSubtitles(draft.subtitles);
@@ -3467,7 +3668,7 @@ export default function App() {
     setActiveTab('workspace');
     addLog(`Loaded draft "${draft.title}" (${draft.subtitleCount} lines).`, 'success');
     addNotification(`Opened draft: ${draft.title}`, 'success');
-  }, [addLog, addNotification, resetStreamHistory]);
+  }, [autoArchiveCurrentProject, addLog, addNotification, resetStreamHistory]);
 
   const handleDuplicateDraft = useCallback(async (draft: ProjectDraft) => {
     const copy: ProjectDraft = {
@@ -3556,6 +3757,22 @@ export default function App() {
       };
       const json = JSON.stringify(backup, null, 2);
       const outName = `urdu_localizer_backup_${new Date().toISOString().slice(0, 10)}.json`;
+
+      if (isNativeAndroid()) {
+        const res = await exportSubtitleNativeAndroid({
+          fileName: outName,
+          content: json,
+          saveMode: preferencesRef.current.androidSaveMode || 'documents',
+        });
+        if (res.success) {
+          addLog(`Exported full JSON backup: ${res.savedPath || outName}`, 'success');
+          addNotification(res.savedPath ? `Backup saved to ${res.savedPath}` : 'Full JSON backup exported', 'success');
+        } else {
+          addNotification(res.error || 'Failed to export backup', 'error');
+        }
+        return;
+      }
+
       const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -3604,6 +3821,7 @@ export default function App() {
         }
       }
       if (parsed.activeProject && Array.isArray(parsed.activeProject.subtitles) && parsed.activeProject.subtitles.length > 0) {
+        await autoArchiveCurrentProject('load-new');
         setSubtitles(parsed.activeProject.subtitles);
         historyRef.current = [parsed.activeProject.subtitles];
         historyIndexRef.current = 0;
@@ -3626,7 +3844,7 @@ export default function App() {
       addLog(`Backup import failed: ${err?.message || err}`, 'error');
       addNotification(err?.message || 'Backup import failed', 'error');
     }
-  }, [refreshDraftsAndStats, addLog, addNotification, resetStreamHistory]);
+  }, [autoArchiveCurrentProject, refreshDraftsAndStats, addLog, addNotification, resetStreamHistory]);
 
   const handleBakeAllStyles = useCallback((silent = false) => {
     if (subtitles.length === 0) {
@@ -4408,6 +4626,57 @@ export default function App() {
   // Reference-counted body scroll lock (guarantees scrolling unlocks cleanly whenever popups close)
   useBodyScrollLock(isAnyOverlayOpen);
 
+  // Sync Android Status Bar with current theme
+  useEffect(() => {
+    void syncAndroidStatusBarTheme(preferences.theme === 'classic');
+  }, [preferences.theme]);
+
+  // Ref for Android hardware Back button & native lifecycle
+  const androidBackHandlerRef = useRef<() => boolean>(() => false);
+  androidBackHandlerRef.current = () => {
+    if (confirmDialog) { setConfirmDialog(null); return true; }
+    if (fieldActionMenu) { setFieldActionMenu(null); return true; }
+    if (columnHistoryMenu) { setColumnHistoryMenu(null); return true; }
+    if (isEditorModalOpen) { setIsEditorModalOpen(false); return true; }
+    if (isFindReplaceOpen) { setIsFindReplaceOpen(false); return true; }
+    if (isTimeShiftOpen) { setIsTimeShiftOpen(false); return true; }
+    if (isGapTimingOpen) { setIsGapTimingOpen(false); return true; }
+    if (isTextCleanupOpen) { setIsTextCleanupOpen(false); return true; }
+    if (isWatermarkModalOpen) { setIsWatermarkModalOpen(false); return true; }
+    if (isStylizerOpen) { setIsStylizerOpen(false); return true; }
+    if (isTranslationSettingsModalOpen) { setIsTranslationSettingsModalOpen(false); return true; }
+    if (isTextResizeOpen) { setIsTextResizeOpen(false); return true; }
+    if (isFontsOpen) { setIsFontsOpen(false); return true; }
+    if (isOnScreenSlidersOpen) { setIsOnScreenSlidersOpen(false); return true; }
+    if (isPreviewSpaceOpen) { setIsPreviewSpaceOpen(false); return true; }
+    if (isGoogleSettingsOpen) { setIsGoogleSettingsOpen(false); return true; }
+    if (isAiConfigOpen) { setIsAiConfigOpen(false); return true; }
+    if (isUnifiedDownloadOpen) { setIsUnifiedDownloadOpen(false); return true; }
+    if (isAiCinemaOpen) { setIsAiCinemaOpen(false); return true; }
+    if (isHomeDrawerOpen) { setIsHomeDrawerOpen(false); return true; }
+    if (isTranslatorDrawerOpen) { setIsTranslatorDrawerOpen(false); return true; }
+    if (isWorkspaceDrawerOpen) { setIsWorkspaceDrawerOpen(false); return true; }
+    if (isStylingDrawerOpen) { setIsStylingDrawerOpen(false); return true; }
+    if (activeTab !== 'home') {
+      setActiveTab('home');
+      return true;
+    }
+    return false;
+  };
+
+  useEffect(() => {
+    const cleanup = initAndroidNativeShell({
+      isLightTheme: preferencesRef.current.theme === 'classic',
+      onKeyboardChange: (visible) => setIsKeyboardActive(visible),
+      onNetworkChange: (connected) => setIsOnline(connected),
+      onBackButton: () => androidBackHandlerRef.current(),
+      onIncomingFile: (payload) => {
+        void processSubtitleContentRef.current(payload.name, payload.content);
+      },
+    });
+    return cleanup;
+  }, []);
+
   const showWorkspacePinnedFooter = activeTab === 'workspace' && filteredSubtitles.length > 0 && !isKeyboardActive;
 
   return (
@@ -4842,6 +5111,10 @@ export default function App() {
             translationSettings={translationSettings}
             isTranslating={isTranslating}
             isGoogleTranslatingAll={isGoogleTranslatingAll}
+            androidSaveMode={preferences.androidSaveMode || 'documents'}
+            onChangeAndroidSaveMode={(mode: AndroidSaveMode) =>
+              updatePreferences((prev) => ({ ...prev, androidSaveMode: mode }))
+            }
             onDownloadFormatted={downloadFormattedSubtitles}
             onRefreshDownloadSession={refreshDownloadSession}
           />

@@ -19,6 +19,11 @@ import {
   Languages,
 } from 'lucide-react';
 import { CrashSnapshot, ProjectDraft } from '../services/db';
+import {
+  isNativeAndroid,
+  getAndroidPermissionSnapshot,
+  requestAndroidStoragePermission,
+} from '../services/androidNative';
 import { InfoPopover } from './InfoPopover';
 import { ConfirmDialogModal } from './ConfirmDialogModal';
 import { cn } from '../utils/cn';
@@ -53,14 +58,23 @@ type PendingConfirmAction =
   | null;
 
 export function deriveDraftTags(draft: ProjectDraft): string[] {
+  const subs = draft.subtitles || [];
+  const totalCount = draft.subtitleCount || subs.length;
+  const aiCount = draft.translatedCount || subs.filter((s) => Boolean(s.translatedText)).length;
+  const gCount = draft.googleCount ?? subs.filter((s) => Boolean(s.googleTranslateText)).length;
+  const isCompleted =
+    Boolean(draft.isCompleted) ||
+    (totalCount > 0 && (aiCount >= totalCount || gCount >= totalCount));
+
   if (Array.isArray(draft.tags) && draft.tags.length > 0) {
+    if (isCompleted && !draft.tags.includes('Completed')) {
+      return ['Completed', ...draft.tags];
+    }
     return draft.tags;
   }
   const tags: string[] = [];
-  const subs = draft.subtitles || [];
-  const aiCount = draft.translatedCount || subs.filter((s) => Boolean(s.translatedText)).length;
-  const gCount = draft.googleCount ?? subs.filter((s) => Boolean(s.googleTranslateText)).length;
 
+  if (isCompleted) tags.push('Completed');
   if (aiCount > 0) tags.push('AI');
   if (gCount > 0) tags.push('Neutral / Google');
 
@@ -130,7 +144,19 @@ export const HomeTabView: React.FC<HomeTabViewProps> = ({
 
   const hasAnySubtitlesInApp = subtitlesCount > 0 || drafts.length > 0;
 
-  const handleOpenLocalPicker = () => {
+  const nativeAndroid = isNativeAndroid();
+
+  const handleOpenLocalPicker = async () => {
+    if (nativeAndroid) {
+      try {
+        const snap = await getAndroidPermissionSnapshot();
+        if (snap.publicStorage === 'prompt' || snap.publicStorage === 'prompt-with-rationale') {
+          await requestAndroidStoragePermission();
+        }
+      } catch {
+        // Proceed to system Storage Access Framework document picker
+      }
+    }
     fileInputRef.current?.click();
     try {
       if (typeof navigator !== 'undefined' && navigator.storage && navigator.storage.persist) {
@@ -364,7 +390,11 @@ export const HomeTabView: React.FC<HomeTabViewProps> = ({
           <input
             ref={fileInputRef}
             type="file"
-            accept=".srt,.vtt,.ass,.ssa,.sbv,.lrc,.json,.txt,text/vtt,text/plain,application/json"
+            accept={
+              nativeAndroid
+                ? '*/*'
+                : '.srt,.vtt,.ass,.ssa,.sbv,.lrc,.json,.txt,text/vtt,text/plain,application/json,application/x-subrip'
+            }
             onChange={(e) => {
               const file = e.target.files?.[0];
               if (file) onUploadFile(file);
@@ -531,6 +561,9 @@ export const HomeTabView: React.FC<HomeTabViewProps> = ({
           <div className="divide-y border-t" style={{ borderColor: 'var(--theme-border)' }}>
             {filteredTranslatedItems.map(({ draft, aiCount, gCount, tags }) => {
               const isOpened = activeDraftId === draft.id;
+              const isDone =
+                Boolean(draft.isCompleted) ||
+                (draft.subtitleCount > 0 && (aiCount >= draft.subtitleCount || gCount >= draft.subtitleCount));
               return (
                 <div
                   key={`trans-${draft.id}`}
@@ -546,6 +579,11 @@ export const HomeTabView: React.FC<HomeTabViewProps> = ({
                       <h4 className="text-xs font-semibold truncate" title={draft.title}>
                         {draft.title}
                       </h4>
+                      {isDone && (
+                        <span className="px-1.5 py-0.5 rounded text-[9.5px] font-semibold bg-emerald-500/15 text-emerald-500 shrink-0">
+                          Completed
+                        </span>
+                      )}
                       {isOpened && (
                         <span
                           className="text-[10px] font-semibold shrink-0"
@@ -792,7 +830,7 @@ export const HomeTabView: React.FC<HomeTabViewProps> = ({
           pendingConfirm?.type === 'delete-draft'
             ? `Are you sure you want to permanently delete "${pendingConfirm.title}"?`
             : pendingConfirm?.type === 'discard-active'
-            ? `Are you sure you want to clear "${pendingConfirm.title}" from the workspace? Unsaved changes will be lost.`
+            ? `Clear "${pendingConfirm.title}" from the workspace? Your active progress will be auto-saved to Drafts (or Translated Subtitles if complete).`
             : 'Are you sure you want to discard the crash recovery snapshot?'
         }
         confirmLabel="Yes"

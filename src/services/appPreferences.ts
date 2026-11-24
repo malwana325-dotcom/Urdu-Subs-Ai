@@ -1,5 +1,6 @@
 import { AppTheme } from '../components/ThemeSelector';
 import { SubtitleItem } from '../utils/srtParser';
+import type { AndroidSaveMode } from './androidNative';
 
 export type MobileTab = 'home' | 'translator' | 'workspace' | 'styling' | 'download' | 'menu';
 export type MobileSubtitleView = 'cards' | 'table' | 'stream-switch' | 'compact';
@@ -87,6 +88,7 @@ export interface AppPreferences {
   defaultReadOnly: boolean;
   defaultPageSize: number; // 25 | 50 | 100 | 0
   googleRoutingMode: GoogleRoutingMode;
+  androidSaveMode: AndroidSaveMode;
 }
 
 export const DEFAULT_DEVELOPER_SETTINGS: DeveloperSettings = {
@@ -139,6 +141,7 @@ export const DEFAULT_APP_PREFERENCES: AppPreferences = {
   defaultReadOnly: true,
   defaultPageSize: 50,
   googleRoutingMode: 'hybrid',
+  androidSaveMode: 'documents',
 };
 
 const PREFS_STORAGE_KEY = 'urdu_dubber_app_prefs_v1';
@@ -207,6 +210,12 @@ export function loadAppPreferences(): AppPreferences {
         parsed?.googleRoutingMode === 'web' || parsed?.googleRoutingMode === 'cloud' || parsed?.googleRoutingMode === 'hybrid'
           ? parsed.googleRoutingMode
           : 'hybrid',
+      androidSaveMode:
+        parsed?.androidSaveMode === 'documents' ||
+        parsed?.androidSaveMode === 'documents-and-share' ||
+        parsed?.androidSaveMode === 'share'
+          ? parsed.androidSaveMode
+          : 'documents',
     };
   } catch {
     return DEFAULT_APP_PREFERENCES;
