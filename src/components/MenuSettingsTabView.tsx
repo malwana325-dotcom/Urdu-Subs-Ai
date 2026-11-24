@@ -41,14 +41,18 @@ import {
   Smartphone,
   ExternalLink,
   Wifi,
+  FolderOpen,
 } from 'lucide-react';
 import {
   AndroidPermissionSnapshot,
   AndroidSaveMode,
+  clearAndroidExportFolder,
   getAndroidPermissionSnapshot,
+  pickAndroidExportFolder,
   requestAndroidStoragePermission,
   openAndroidAppSettings,
 } from '../services/androidNative';
+import { registerBackHandler } from '../utils/backNavigation';
 import {
   AppPreferences,
   ContainerSize,
@@ -257,13 +261,54 @@ export const MenuSettingsTabView: React.FC<MenuSettingsTabViewProps> = ({
 
   useEffect(() => {
     void refreshAndroidPermissions();
+    const onNativeChange = () => {
+      void refreshAndroidPermissions();
+    };
+    window.addEventListener('urduLocalizerPermissionsChanged', onNativeChange);
+    window.addEventListener('urduLocalizerFolderPicked', onNativeChange);
+    return () => {
+      window.removeEventListener('urduLocalizerPermissionsChanged', onNativeChange);
+      window.removeEventListener('urduLocalizerFolderPicked', onNativeChange);
+    };
   }, []);
+
+  useEffect(() => {
+    return registerBackHandler(() => {
+      if (pendingConfirm) {
+        setPendingConfirm(null);
+        return true;
+      }
+      const hasOpenRow = Object.values(openRows).some(Boolean);
+      if (hasOpenRow) {
+        setOpenRows({});
+        return true;
+      }
+      if (searchQuery.trim().length > 0) {
+        setSearchQuery('');
+        return true;
+      }
+      return false;
+    });
+  }, [pendingConfirm, openRows, searchQuery]);
 
   const handleRequestStoragePerm = async () => {
     setIsCheckingPerms(true);
     try {
       const res = await requestAndroidStoragePermission();
       setAndroidPermMessage(res.message);
+      await refreshAndroidPermissions();
+    } finally {
+      setIsCheckingPerms(false);
+    }
+  };
+
+  const handlePickAndroidExportFolder = async () => {
+    setIsCheckingPerms(true);
+    try {
+      const picked = await pickAndroidExportFolder();
+      if (picked) {
+        setAndroidPermMessage(`Export folder granted: "${picked.name}".`);
+      }
       await refreshAndroidPermissions();
     } finally {
       setIsCheckingPerms(false);
@@ -1847,7 +1892,19 @@ export const MenuSettingsTabView: React.FC<MenuSettingsTabViewProps> = ({
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-1.5">
+            {androidPerms?.isNativeAndroid && (
+              <div
+                className="px-2.5 py-2 rounded-lg border flex items-center justify-between gap-2 text-[11px]"
+                style={obsidianSurfaceStyle}
+              >
+                <span className="opacity-70 truncate">Export Folder</span>
+                <span className="font-mono font-semibold truncate max-w-[180px]">
+                  {androidPerms.exportFolder?.name || 'Documents/UrduLocalizer (Default)'}
+                </span>
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center gap-1.5">
             <button
               type="button"
               onClick={() => { void handleRequestStoragePerm(); }}
@@ -1858,6 +1915,34 @@ export const MenuSettingsTabView: React.FC<MenuSettingsTabViewProps> = ({
               {isCheckingPerms ? <Loader2 size={12} className="animate-spin" /> : <Shield size={12} />}
               <span>{androidPerms?.isNativeAndroid ? 'Grant Storage Access' : 'Verify File Access'}</span>
             </button>
+
+            {androidPerms?.isNativeAndroid && (
+              <button
+                type="button"
+                onClick={() => { void handlePickAndroidExportFolder(); }}
+                disabled={isCheckingPerms}
+                className="min-h-[34px] px-2.5 rounded-lg border text-[11px] font-semibold flex items-center justify-center gap-1 cursor-pointer btn-inch-cap"
+                style={obsidianSurfaceStyle}
+              >
+                <FolderOpen size={11} style={{ color: 'var(--theme-accent)' }} />
+                <span>{androidPerms.exportFolder ? 'Change Folder' : 'Select Export Folder'}</span>
+              </button>
+            )}
+
+            {androidPerms?.isNativeAndroid && androidPerms.exportFolder && (
+              <button
+                type="button"
+                onClick={() => {
+                  clearAndroidExportFolder();
+                  void refreshAndroidPermissions();
+                }}
+                className="min-h-[34px] px-2.5 rounded-lg border text-[11px] font-semibold flex items-center justify-center gap-1 cursor-pointer btn-inch-cap"
+                style={obsidianSurfaceStyle}
+              >
+                <X size={11} />
+                <span>Reset Folder</span>
+              </button>
+            )}
 
             <button
               type="button"
@@ -1887,7 +1972,7 @@ export const MenuSettingsTabView: React.FC<MenuSettingsTabViewProps> = ({
             <p className="text-[10.5px] opacity-80 leading-snug">{androidPermMessage}</p>
           )}
           <p className="text-[10px] opacity-55 leading-snug">
-            Manifest permissions: INTERNET, ACCESS_NETWORK_STATE, WAKE_LOCK, READ/WRITE_EXTERNAL_STORAGE (scoped API 24–36) &amp; FileProvider Share.
+            Manifest permissions: INTERNET, ACCESS_NETWORK_STATE, WAKE_LOCK, READ/WRITE_EXTERNAL_STORAGE (Android &le;12), SAF Persistent Folder Access (Android 11–16), &amp; FileProvider Share.
           </p>
         </>
       ),

@@ -132,7 +132,7 @@ import { HomeTabView } from './components/HomeTabView';
 import { MobileSubtitleCard, WorkspaceStreamField } from './components/MobileSubtitleCard';
 import { TranslatorTabView } from './components/TranslatorTabView';
 import { StylingTabView } from './components/StylingTabView';
-import { DownloadTabView, DownloadFormat } from './components/DownloadTabView';
+import { DownloadTabView, DownloadFormat, LastExportNotice } from './components/DownloadTabView';
 import { MenuSettingsTabView, SettingsCategoryId, TranslationSubMenuId } from './components/MenuSettingsTabView';
 import { ThemeSelector, AppTheme } from './components/ThemeSelector';
 import { InfoPopover } from './components/InfoPopover';
@@ -143,6 +143,7 @@ import { getClampedPopoverStyle } from './utils/popoverPlacement';
 import { OnScreenSlidersBar } from './components/OnScreenSlidersBar';
 import { MySubtitlesDrawer } from './components/MySubtitlesDrawer';
 import { TranslatorDrawer } from './components/TranslatorDrawer';
+import { GlowingProgressButton } from './components/GlowingProgressButton';
 import { WorkspaceDrawer } from './components/WorkspaceDrawer';
 import { TextResizePopupModal } from './components/TextResizePopupModal';
 import { FontsPopupModal } from './components/FontsPopupModal';
@@ -199,11 +200,16 @@ import {
 } from './services/appPreferences';
 import {
   AndroidSaveMode,
+  getAndroidPermissionSnapshot,
   isNativeAndroid,
   exportSubtitleNativeAndroid,
   initAndroidNativeShell,
+  pickAndroidExportFolder,
+  requestAndroidStoragePermission,
+  shareExportedAndroidSubtitle,
   syncAndroidStatusBarTheme,
 } from './services/androidNative';
+import { invokeRegisteredBackHandlers } from './utils/backNavigation';
 import { SubtitleRowEditableCell } from './components/SubtitleRowEditableCell';
 
 function cn(...inputs: ClassValue[]) {
@@ -1352,6 +1358,14 @@ export default function App() {
   );
 
   const [isWatermarkModalOpen, setIsWatermarkModalOpen] = useState(false);
+  const [lastExportNotice, setLastExportNotice] = useState<LastExportNotice | null>(null);
+  const [isAndroidSetupModalOpen, setIsAndroidSetupModalOpen] = useState(false);
+  const [androidSetupStatus, setAndroidSetupStatus] = useState<{
+    needsRuntimePrompt: boolean;
+    folderName: string | null;
+    sdkInt: number | null;
+  }>({ needsRuntimePrompt: false, folderName: null, sdkInt: null });
+  const lastBackPressRef = useRef<number>(0);
 
   // Shared Yes/No Confirmation Modal State
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -3045,6 +3059,23 @@ export default function App() {
     addLog("Gemini translation halted immediately.", "warning");
   };
 
+  const requestStopTranslation = () => {
+    const done = subtitlesRef.current.filter(s => Boolean(s.translatedText)).length;
+    const total = subtitlesRef.current.length;
+    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+    setConfirmDialog({
+      title: 'Pause / Stop AI Translation?',
+      message: `AI dubbing is at ${pct}% (${done}/${total} blocks completed). Completed lines remain saved. Stop active AI workers now?`,
+      confirmLabel: 'Stop AI',
+      cancelLabel: 'Keep Running',
+      danger: true,
+      onConfirm: () => {
+        setConfirmDialog(null);
+        stopTranslation();
+      },
+    });
+  };
+
   const translateAllGoogle = async () => {
     if (isGoogleTranslatingAll) return;
     const subsBeforeGoogle = subtitlesRef.current;
@@ -3363,7 +3394,7 @@ export default function App() {
         }
       }
 
-      // Native Capacitor Android export (Documents/UrduLocalizer + FileProvider Share Sheet)
+      // Native Capacitor Android export (Selected SAF Folder / Documents/UrduLocalizer + FileProvider Share Sheet)
       if (isNativeAndroid()) {
         const res = await exportSubtitleNativeAndroid({
           fileName: outFileName,
@@ -3371,6 +3402,17 @@ export default function App() {
           saveMode: preferencesRef.current.androidSaveMode || 'documents',
         });
         if (res.success) {
+          const locationLabel = res.savedPath
+            ? res.savedPath
+            : 'Android Share / Save-As Sheet';
+          setLastExportNotice({
+            fileName: outFileName,
+            locationLabel,
+            shared: res.shared,
+            onShareAgain: () => {
+              void shareExportedAndroidSubtitle(outFileName, content);
+            },
+          });
           const msg = res.savedPath
             ? res.shared
               ? `Saved to ${res.savedPath} & opened Share sheet`
@@ -3379,7 +3421,7 @@ export default function App() {
           addLog(msg, "success");
           addNotification(msg, "success");
         } else {
-          const errMsg = res.error || "Android storage export failed — check Storage permission in Settings.";
+          const errMsg = res.error || "Android storage export failed — select an Export Folder or check permissions.";
           addLog(errMsg, "error");
           addNotification(errMsg, "error");
         }
@@ -3447,6 +3489,23 @@ export default function App() {
       return next;
     });
     addLog("Google translation halted immediately.", "warning");
+  };
+
+  const requestStopGoogleTranslate = () => {
+    const done = subtitlesRef.current.filter(s => Boolean(s.googleTranslateText)).length;
+    const total = subtitlesRef.current.length;
+    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+    setConfirmDialog({
+      title: 'Pause / Stop Neutral Translation?',
+      message: `Neutral translation is at ${pct}% (${done}/${total} blocks completed). Completed lines remain saved. Stop active workers now?`,
+      confirmLabel: 'Stop Neutral',
+      cancelLabel: 'Keep Running',
+      danger: true,
+      onConfirm: () => {
+        setConfirmDialog(null);
+        stopGoogleTranslate();
+      },
+    });
   };
 
   const downloadSRT = async (type: 'ai' | 'google' = 'ai') => {
@@ -4545,6 +4604,7 @@ export default function App() {
     isWatermarkModalOpen ||
     isStylizerOpen ||
     isTranslationSettingsModalOpen ||
+    isAndroidSetupModalOpen ||
     Boolean(confirmDialog) ||
     Boolean(fieldActionMenu) ||
     Boolean(columnHistoryMenu);
@@ -4631,10 +4691,16 @@ export default function App() {
     void syncAndroidStatusBarTheme(preferences.theme === 'classic');
   }, [preferences.theme]);
 
-  // Ref for Android hardware Back button & native lifecycle
+  // Ref for Android hardware/gesture Back button & native lifecycle
   const androidBackHandlerRef = useRef<() => boolean>(() => false);
   androidBackHandlerRef.current = () => {
     if (confirmDialog) { setConfirmDialog(null); return true; }
+    if (isAndroidSetupModalOpen) {
+      try { localStorage.setItem('urdu_localizer_android_setup_done', '1'); } catch {}
+      setIsAndroidSetupModalOpen(false);
+      return true;
+    }
+    if (invokeRegisteredBackHandlers()) return true;
     if (fieldActionMenu) { setFieldActionMenu(null); return true; }
     if (columnHistoryMenu) { setColumnHistoryMenu(null); return true; }
     if (isEditorModalOpen) { setIsEditorModalOpen(false); return true; }
@@ -4653,12 +4719,19 @@ export default function App() {
     if (isAiConfigOpen) { setIsAiConfigOpen(false); return true; }
     if (isUnifiedDownloadOpen) { setIsUnifiedDownloadOpen(false); return true; }
     if (isAiCinemaOpen) { setIsAiCinemaOpen(false); return true; }
+    if (isWorkerMonitorOpen) { setIsWorkerMonitorOpen(false); return true; }
     if (isHomeDrawerOpen) { setIsHomeDrawerOpen(false); return true; }
     if (isTranslatorDrawerOpen) { setIsTranslatorDrawerOpen(false); return true; }
     if (isWorkspaceDrawerOpen) { setIsWorkspaceDrawerOpen(false); return true; }
     if (isStylingDrawerOpen) { setIsStylingDrawerOpen(false); return true; }
     if (activeTab !== 'home') {
       setActiveTab('home');
+      return true;
+    }
+    const now = Date.now();
+    if (now - lastBackPressRef.current > 2200) {
+      lastBackPressRef.current = now;
+      addNotification('Press Back again to exit app', 'warning');
       return true;
     }
     return false;
@@ -4674,8 +4747,39 @@ export default function App() {
         void processSubtitleContentRef.current(payload.name, payload.content);
       },
     });
+
+    if (isNativeAndroid()) {
+      let alreadyDone = false;
+      try {
+        alreadyDone = localStorage.getItem('urdu_localizer_android_setup_done') === '1';
+      } catch {
+        alreadyDone = false;
+      }
+      if (!alreadyDone) {
+        setTimeout(() => {
+          void getAndroidPermissionSnapshot().then(async (snap) => {
+            if (!snap.isNativeAndroid) return;
+            if (snap.needsRuntimePrompt) {
+              await requestAndroidStoragePermission();
+            }
+            const refreshed = await getAndroidPermissionSnapshot();
+            if (refreshed.needsRuntimePrompt || !refreshed.exportFolder) {
+              setAndroidSetupStatus({
+                needsRuntimePrompt: refreshed.needsRuntimePrompt,
+                folderName: refreshed.exportFolder?.name || null,
+                sdkInt: refreshed.sdkInt,
+              });
+              setIsAndroidSetupModalOpen(true);
+            } else {
+              try { localStorage.setItem('urdu_localizer_android_setup_done', '1'); } catch {}
+            }
+          });
+        }, 450);
+      }
+    }
+
     return cleanup;
-  }, []);
+  }, [addNotification]);
 
   const showWorkspacePinnedFooter = activeTab === 'workspace' && filteredSubtitles.length > 0 && !isKeyboardActive;
 
@@ -5042,10 +5146,8 @@ export default function App() {
             workerStates={workerStates}
             isWorkerMonitorOpen={isWorkerMonitorOpen}
             onToggleWorkerMonitor={() => setIsWorkerMonitorOpen(prev => !prev)}
-            onStartTranslation={startTranslation}
-            onStopTranslation={stopTranslation}
-            onStartGoogleTranslate={translateAllGoogle}
-            onStopGoogleTranslate={stopGoogleTranslate}
+            onStopTranslation={requestStopTranslation}
+            onStopGoogleTranslate={requestStopGoogleTranslate}
             onOpenTranslationSettings={() => {
               setFocusedSettingsCategory('translation');
               setFocusedTranslationSub('language');
@@ -5115,6 +5217,8 @@ export default function App() {
             onChangeAndroidSaveMode={(mode: AndroidSaveMode) =>
               updatePreferences((prev) => ({ ...prev, androidSaveMode: mode }))
             }
+            lastExportNotice={lastExportNotice}
+            onDismissLastExportNotice={() => setLastExportNotice(null)}
             onDownloadFormatted={downloadFormattedSubtitles}
             onRefreshDownloadSession={refreshDownloadSession}
           />
@@ -6147,158 +6251,110 @@ export default function App() {
         </button>
       )}
 
-      {/* Translator Tab: Stacked Translation Buttons + Progress Drawer Trigger in Bottom-Right Corner */}
-      {activeTab === 'translator' && !isTranslatorDrawerOpen && !isKeyboardActive && (
+      {/* Translator Tab: Horizontal Equal-Sized Action Row with Glowing Perimeter Progress Borders */}
+      {activeTab === 'translator' && !isKeyboardActive && (
         <div
           className={cn(
-            'fixed right-3.5 sm:right-5 z-[60] flex flex-col items-end gap-1.5 transition-[bottom] duration-200',
+            'fixed right-3.5 sm:right-5 left-3.5 sm:left-auto z-[60] flex flex-row items-center justify-end gap-4 sm:gap-5 max-w-[calc(100vw-28px)] overflow-x-auto no-scrollbar py-1 px-0.5 transition-[bottom] duration-200',
             isBottomNavVisible
               ? 'bottom-[calc(54px+max(env(safe-area-inset-bottom,0px),6px))] lg:bottom-5'
               : 'bottom-[calc(14px+max(env(safe-area-inset-bottom,0px),6px))] lg:bottom-5',
             isAnyOverlayOpen && 'pointer-events-none select-none'
           )}
         >
-          {/* AI Dub Action + Stop (progress bar + ✅ inside button) */}
-          <div className="flex items-center gap-1.5">
-            {isTranslating && (
-              <button
-                type="button"
-                onClick={stopTranslation}
-                className="h-10 px-3 rounded-xl bg-red-600 text-white text-[11px] font-semibold shadow-lg flex items-center justify-center gap-1 cursor-pointer touch-tactile btn-inch-cap"
-                aria-label="Stop AI translation"
-              >
-                <Square size={12} className="shrink-0" />
-                <span className="truncate">Stop AI</span>
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={startTranslation}
-              disabled={isTranslating || stats.total === 0}
-              className="relative overflow-hidden h-10 px-3 rounded-xl text-white text-[11px] font-semibold shadow-lg border flex items-center justify-center gap-1.5 disabled:opacity-45 cursor-pointer touch-tactile btn-inch-cap"
-              style={{
-                backgroundColor: 'var(--theme-accent)',
-                borderColor: 'rgba(255,255,255,0.2)',
-              }}
-              title={
-                isTranslating
-                  ? `AI Dubbing (${translationSpeed}/s · ${stats.progress}%)`
-                  : stats.total > 0 && stats.translated === stats.total
-                  ? 'AI Translation Completed'
-                  : stats.translated > 0
-                  ? `Resume AI Dub (${stats.progress}%)`
-                  : 'Start AI Dub'
-              }
-            >
-              {stats.total > 0 && (
-                <span
-                  aria-hidden="true"
-                  className="absolute inset-y-0 left-0 bg-white/25 transition-all duration-300"
-                  style={{ width: `${stats.progress}%` }}
-                />
-              )}
-              <span className="relative z-10 flex items-center gap-1.5 truncate tabular-nums">
-                {isTranslating ? (
-                  <Loader2 size={13} className="animate-spin shrink-0" />
-                ) : stats.total > 0 && stats.translated === stats.total ? (
-                  <span aria-label="Completed" className="text-[11px] leading-none">✅</span>
-                ) : (
-                  <Sparkles size={13} className="shrink-0" />
-                )}
-                <span className="truncate">
-                  {isTranslating
-                    ? `AI ${stats.progress}%`
-                    : stats.total > 0 && stats.translated === stats.total
-                    ? 'AI Done'
-                    : stats.translated > 0
-                    ? `AI ${stats.progress}%`
-                    : 'AI Dub'}
-                </span>
-              </span>
-            </button>
-          </div>
+          {isTranslating && (
+            <GlowingProgressButton
+              variant="danger"
+              progress={stats.progress}
+              isActive
+              onClick={requestStopTranslation}
+              ariaLabel="Stop AI translation"
+              title="Pause or Stop AI Translation"
+              icon={<Square size={14} />}
+              label="Stop AI"
+            />
+          )}
 
-          {/* Neutral / Google Translate Action + Stop (progress bar + ✅ inside button) */}
-          <div className="flex items-center gap-1.5">
-            {isGoogleTranslatingAll && (
-              <button
-                type="button"
-                onClick={stopGoogleTranslate}
-                className="h-10 px-3 rounded-xl bg-red-600 text-white text-[11px] font-semibold shadow-lg flex items-center justify-center gap-1 cursor-pointer touch-tactile btn-inch-cap"
-                aria-label="Stop Google translation"
-              >
-                <Square size={12} className="shrink-0" />
-                <span className="truncate">Stop N</span>
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={translateAllGoogle}
-              disabled={isGoogleTranslatingAll || stats.total === 0}
-              className="relative overflow-hidden h-10 px-3 rounded-xl border text-[11px] font-semibold shadow-lg flex items-center justify-center gap-1.5 disabled:opacity-45 cursor-pointer touch-tactile btn-inch-cap"
-              style={{
-                backgroundColor: 'var(--theme-surface)',
-                borderColor: 'var(--theme-border)',
-                color: 'var(--theme-text)',
-              }}
-              title={
-                isGoogleTranslatingAll
-                  ? `Neutral Translating (${stats.googleProgress}%)`
-                  : stats.total > 0 && stats.google === stats.total
-                  ? 'Neutral / Google Translation Completed'
-                  : 'Run Neutral / Google Translate'
-              }
-            >
-              {stats.total > 0 && (
-                <span
-                  aria-hidden="true"
-                  className="absolute inset-y-0 left-0 opacity-20 transition-all duration-300"
-                  style={{ width: `${stats.googleProgress}%`, backgroundColor: 'var(--theme-accent)' }}
-                />
-              )}
-              <span className="relative z-10 flex items-center gap-1.5 truncate tabular-nums">
-                {isGoogleTranslatingAll ? (
-                  <Loader2 size={13} className="animate-spin shrink-0" />
-                ) : stats.total > 0 && stats.google === stats.total ? (
-                  <span aria-label="Completed" className="text-[11px] leading-none">✅</span>
-                ) : (
-                  <Languages size={13} style={{ color: 'var(--theme-accent)' }} className="shrink-0" />
-                )}
-                <span className="truncate">
-                  {isGoogleTranslatingAll
-                    ? `Neutral ${stats.googleProgress}%`
-                    : stats.total > 0 && stats.google === stats.total
-                    ? 'Neutral Done'
-                    : stats.google > 0
-                    ? `Neutral ${stats.googleProgress}%`
-                    : 'Neutral'}
-                </span>
-              </span>
-            </button>
-          </div>
+          <GlowingProgressButton
+            variant="ai"
+            progress={stats.progress}
+            isActive={isTranslating}
+            disabled={isTranslating || stats.total === 0}
+            onClick={startTranslation}
+            title={
+              isTranslating
+                ? `AI Dubbing (${translationSpeed}/s · ${stats.progress}%)`
+                : stats.total > 0 && stats.translated === stats.total
+                ? 'AI Translation Completed'
+                : stats.translated > 0
+                ? `Resume AI Dub (${stats.progress}%)`
+                : 'Start AI Dub'
+            }
+            icon={
+              isTranslating ? (
+                <Loader2 size={15} className="animate-spin" />
+              ) : stats.total > 0 && stats.translated === stats.total ? (
+                <CheckCircle2 size={15} />
+              ) : (
+                <Sparkles size={15} />
+              )
+            }
+            label={
+              isTranslating
+                ? `AI ${stats.progress}%`
+                : stats.total > 0 && stats.translated === stats.total
+                ? 'AI Done'
+                : stats.translated > 0
+                ? `AI ${stats.progress}%`
+                : 'AI Dub'
+            }
+          />
 
-          {/* Translator Drawer % Progress Trigger */}
-          <button
-            type="button"
-            onClick={() => setIsTranslatorDrawerOpen(true)}
-            className="h-11 min-w-[46px] px-3.5 rounded-2xl border shadow-lg flex items-center justify-center gap-1.5 cursor-pointer touch-tactile btn-inch-cap"
-            style={{
-              backgroundColor: 'var(--theme-accent)',
-              borderColor: 'rgba(255,255,255,0.18)',
-              color: '#ffffff',
-            }}
-            title="Open Translation Progress & Parameters Drawer (or swipe left from right edge)"
-            aria-label="Open Translation Progress & Parameters Drawer"
-          >
-            {isTranslating || isGoogleTranslatingAll ? (
-              <Loader2 size={15} className="animate-spin shrink-0" />
-            ) : (
-              <Activity size={15} className="shrink-0" />
-            )}
-            <span className="text-[11px] font-mono font-semibold leading-none tabular-nums">
-              {stats.progress}%
-            </span>
-          </button>
+          {isGoogleTranslatingAll && (
+            <GlowingProgressButton
+              variant="danger"
+              progress={stats.googleProgress}
+              isActive
+              onClick={requestStopGoogleTranslate}
+              ariaLabel="Stop Neutral translation"
+              title="Pause or Stop Neutral Translation"
+              icon={<Square size={14} />}
+              label="Stop N"
+            />
+          )}
+
+          <GlowingProgressButton
+            variant="neutral"
+            progress={stats.googleProgress}
+            isActive={isGoogleTranslatingAll}
+            disabled={isGoogleTranslatingAll || stats.total === 0}
+            onClick={translateAllGoogle}
+            title={
+              isGoogleTranslatingAll
+                ? `Neutral Translating (${stats.googleProgress}%)`
+                : stats.total > 0 && stats.google === stats.total
+                ? 'Neutral / Google Translation Completed'
+                : 'Run Neutral / Google Translate'
+            }
+            icon={
+              isGoogleTranslatingAll ? (
+                <Loader2 size={15} className="animate-spin" />
+              ) : stats.total > 0 && stats.google === stats.total ? (
+                <CheckCircle2 size={15} />
+              ) : (
+                <Languages size={15} />
+              )
+            }
+            label={
+              isGoogleTranslatingAll
+                ? `Neutral ${stats.googleProgress}%`
+                : stats.total > 0 && stats.google === stats.total
+                ? 'Neutral Done'
+                : stats.google > 0
+                ? `Neutral ${stats.googleProgress}%`
+                : 'Neutral'
+            }
+          />
         </div>
       )}
 
@@ -6365,7 +6421,7 @@ export default function App() {
         onNotify={addNotification}
       />
 
-      {/* Translator Tab Exclusive Right-Side Drawer (Progress & Parameters) */}
+      {/* Translator Tab Exclusive Right-Side Drawer (Swipe Left from Right Edge) */}
       <TranslatorDrawer
         isOpen={activeTab === 'translator' && isTranslatorDrawerOpen}
         onClose={() => setIsTranslatorDrawerOpen(false)}
@@ -6397,9 +6453,9 @@ export default function App() {
         translationSettings={translationSettings}
         onUpdateTranslationSettings={setTranslationSettings}
         onStartTranslation={startTranslation}
-        onStopTranslation={stopTranslation}
+        onStopTranslation={requestStopTranslation}
         onStartGoogleTranslate={translateAllGoogle}
-        onStopGoogleTranslate={stopGoogleTranslate}
+        onStopGoogleTranslate={requestStopGoogleTranslate}
         onOpenFullSettings={() => {
           setFocusedSettingsCategory('translation');
           setFocusedTranslationSub('language');
@@ -6875,6 +6931,120 @@ export default function App() {
           </div>
         );
       })()}
+
+      {/* First-Launch Android Permissions & Export Folder Setup Modal */}
+      {isAndroidSetupModalOpen && (
+        <div
+          className="fixed inset-0 z-[260] bg-black/60 backdrop-blur-md flex items-center justify-center p-4"
+          onClick={() => {
+            try { localStorage.setItem('urdu_localizer_android_setup_done', '1'); } catch {}
+            setIsAndroidSetupModalOpen(false);
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm rounded-2xl border shadow-2xl overflow-hidden animate-in zoom-in-95 duration-150"
+            style={{
+              backgroundColor: 'var(--theme-surface)',
+              borderColor: 'var(--theme-border)',
+              color: 'var(--theme-text)',
+            }}
+          >
+            <div className="px-4 py-3 border-b flex items-center justify-between gap-2" style={{ borderColor: 'var(--theme-border)' }}>
+              <div className="flex items-center gap-2 min-w-0">
+                <Shield size={16} style={{ color: 'var(--theme-accent)' }} className="shrink-0" />
+                <h3 className="text-sm font-semibold truncate">Android Storage &amp; Folder Setup</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  try { localStorage.setItem('urdu_localizer_android_setup_done', '1'); } catch {}
+                  setIsAndroidSetupModalOpen(false);
+                }}
+                className="w-8 h-8 rounded-lg border flex items-center justify-center opacity-75 hover:opacity-100 cursor-pointer"
+                style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+                aria-label="Close setup"
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-3 text-xs">
+              <p className="opacity-85 leading-relaxed">
+                To import subtitle files and save exported `.srt` / `.ass` files where you can easily find them, grant storage access and pick your default Export Folder (for example, <span className="font-semibold">Downloads</span>).
+              </p>
+
+              <div className="rounded-xl border p-2.5 space-y-1.5 text-[11px]" style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="opacity-70">Runtime Storage</span>
+                  <span className="font-mono font-semibold">
+                    {androidSetupStatus.needsRuntimePrompt ? 'Needs Permission' : 'Ready'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="opacity-70">Export Folder</span>
+                  <span className="font-mono font-semibold truncate max-w-[170px]">
+                    {androidSetupStatus.folderName || 'Not selected yet'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-2 pt-1">
+                {androidSetupStatus.needsRuntimePrompt && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await requestAndroidStoragePermission();
+                      const snap = await getAndroidPermissionSnapshot();
+                      setAndroidSetupStatus({
+                        needsRuntimePrompt: snap.needsRuntimePrompt,
+                        folderName: snap.exportFolder?.name || null,
+                        sdkInt: snap.sdkInt,
+                      });
+                    }}
+                    className="w-full min-h-[40px] px-3 rounded-xl text-white font-semibold flex items-center justify-center gap-1.5 cursor-pointer touch-tactile"
+                    style={{ backgroundColor: 'var(--theme-accent)' }}
+                  >
+                    <Shield size={14} />
+                    <span>Allow Storage Permission</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const folder = await pickAndroidExportFolder();
+                    if (folder) {
+                      try { localStorage.setItem('urdu_localizer_android_setup_done', '1'); } catch {}
+                      addNotification(`Export folder set to "${folder.name}"`, 'success');
+                      setIsAndroidSetupModalOpen(false);
+                    }
+                  }}
+                  className="w-full min-h-[40px] px-3 rounded-xl text-white font-semibold flex items-center justify-center gap-1.5 cursor-pointer touch-tactile"
+                  style={{ backgroundColor: 'var(--theme-accent)' }}
+                >
+                  <FolderPlus size={14} />
+                  <span>Select Export Folder (e.g. Downloads)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    try { localStorage.setItem('urdu_localizer_android_setup_done', '1'); } catch {}
+                    setIsAndroidSetupModalOpen(false);
+                  }}
+                  className="w-full min-h-[36px] px-3 rounded-xl border text-[11px] font-semibold cursor-pointer opacity-80 hover:opacity-100"
+                  style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+                >
+                  Skip for Now
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Shared Yes / No Confirmation Dialog for Critical Workspace Actions */}
       <ConfirmDialogModal

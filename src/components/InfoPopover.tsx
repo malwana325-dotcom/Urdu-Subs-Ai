@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { HelpCircle, X } from 'lucide-react';
 import { getClampedPopoverStyle } from '../utils/popoverPlacement';
 import { useBodyScrollLock } from '../utils/scrollLock';
+import { registerBackHandler } from '../utils/backNavigation';
 import { cn } from '../utils/cn';
 
 interface InfoPopoverProps {
@@ -26,6 +27,14 @@ export const InfoPopover: React.FC<InfoPopoverProps> = ({
   const triggerRef = useRef<HTMLButtonElement>(null);
 
   useBodyScrollLock(isOpen);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    return registerBackHandler(() => {
+      setIsOpen(false);
+      return true;
+    });
+  }, [isOpen]);
 
   const computePosition = useCallback(() => {
     setPopoverStyle(getClampedPopoverStyle(triggerRef.current, 268, 320));

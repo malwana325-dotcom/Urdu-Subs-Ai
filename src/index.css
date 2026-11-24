@@ -385,7 +385,85 @@ body,
 }
 
 /* Native Range & Checkbox Theme Accent Consistency */
-.theme-root input[type="range"],
 .theme-root input[type="checkbox"] {
   accent-color: var(--theme-accent);
+}
+
+/* Thumb-Only Big-Dot Sliders: disable whole-track touch so scrolling never changes values accidentally */
+.theme-root input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  pointer-events: none;
+  touch-action: pan-y;
+  min-height: 28px;
+  height: 28px;
+  margin: 0;
+  cursor: default;
+}
+
+.theme-root input[type="range"]::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 9999px;
+  background: rgba(148, 163, 184, 0.28);
+  pointer-events: none;
+}
+
+.theme-root input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  pointer-events: auto;
+  touch-action: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 9999px;
+  background: var(--theme-accent);
+  border: 2.5px solid #ffffff;
+  box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.35), 0 3px 10px rgba(0, 0, 0, 0.45);
+  margin-top: -9px;
+  cursor: grab;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.theme-root input[type="range"]::-webkit-slider-thumb:active {
+  cursor: grabbing;
+  transform: scale(1.14);
+  box-shadow: 0 0 0 4px rgba(20, 184, 166, 0.45), 0 4px 14px rgba(0, 0, 0, 0.55);
+}
+
+.theme-root input[type="range"]::-moz-range-track {
+  height: 6px;
+  border-radius: 9999px;
+  background: rgba(148, 163, 184, 0.28);
+  pointer-events: none;
+}
+
+.theme-root input[type="range"]::-moz-range-thumb {
+  pointer-events: auto;
+  touch-action: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 9999px;
+  background: var(--theme-accent);
+  border: 2.5px solid #ffffff;
+  box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.35), 0 3px 10px rgba(0, 0, 0, 0.45);
+  cursor: grab;
+}
+
+.theme-root input[type="range"]::-moz-range-thumb:active {
+  cursor: grabbing;
+  transform: scale(1.14);
+}
+
+@keyframes glowBtnPulse {
+  0%, 100% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.15);
+  }
+}
+
+.glow-btn-active-pulse {
+  animation: glowBtnPulse 1.8s ease-in-out infinite;
 }

@@ -436,6 +436,10 @@ export const TranslatorDrawer: React.FC<TranslatorDrawerProps> = ({
             </div>
 
             <div className="space-y-2.5">
+              <p className="text-[10px] opacity-60">
+                Drag the circular slider dots directly to adjust (track taps disabled while scrolling).
+              </p>
+
               <div>
                 <div className="flex justify-between text-[11px] mb-1">
                   <span>Gemini Workers</span>
@@ -447,7 +451,7 @@ export const TranslatorDrawer: React.FC<TranslatorDrawerProps> = ({
                   max={10}
                   value={geminiWorkers}
                   onChange={(e) => onUpdateGeminiWorkers(Number(e.target.value))}
-                  className="w-full h-1.5 cursor-pointer"
+                  className="w-full"
                 />
               </div>
 
@@ -463,7 +467,7 @@ export const TranslatorDrawer: React.FC<TranslatorDrawerProps> = ({
                   step={5}
                   value={geminiBatchSize}
                   onChange={(e) => onUpdateGeminiBatchSize(Number(e.target.value))}
-                  className="w-full h-1.5 cursor-pointer"
+                  className="w-full"
                 />
               </div>
 
@@ -479,7 +483,7 @@ export const TranslatorDrawer: React.FC<TranslatorDrawerProps> = ({
                   step={100}
                   value={geminiDelay}
                   onChange={(e) => onUpdateGeminiDelay(Number(e.target.value))}
-                  className="w-full h-1.5 cursor-pointer"
+                  className="w-full"
                 />
               </div>
 
@@ -495,7 +499,7 @@ export const TranslatorDrawer: React.FC<TranslatorDrawerProps> = ({
                     max={15}
                     value={googleWorkers}
                     onChange={(e) => onUpdateGoogleWorkers(Number(e.target.value))}
-                    className="w-full h-1.5 cursor-pointer"
+                    className="w-full"
                   />
                 </div>
                 <div>
@@ -510,7 +514,7 @@ export const TranslatorDrawer: React.FC<TranslatorDrawerProps> = ({
                     step={5}
                     value={googleBatchSize}
                     onChange={(e) => onUpdateGoogleBatchSize(Number(e.target.value))}
-                    className="w-full h-1.5 cursor-pointer"
+                    className="w-full"
                   />
                 </div>
               </div>

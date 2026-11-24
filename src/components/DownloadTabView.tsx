@@ -22,7 +22,15 @@ import {
 } from 'lucide-react';
 import { SubtitleItem } from '../utils/srtParser';
 import { dbService } from '../services/db';
-import { AndroidSaveMode, isNativeAndroid } from '../services/androidNative';
+import {
+  AndroidExportFolder,
+  AndroidSaveMode,
+  clearAndroidExportFolder,
+  getSelectedAndroidExportFolder,
+  isNativeAndroid,
+  pickAndroidExportFolder,
+} from '../services/androidNative';
+import { registerBackHandler } from '../utils/backNavigation';
 import {
   TranslationSettings,
   TARGET_LANGUAGES,
@@ -49,6 +57,13 @@ export interface ExportFolderTarget {
   dirName?: string;
 }
 
+export interface LastExportNotice {
+  fileName: string;
+  locationLabel: string;
+  shared?: boolean;
+  onShareAgain?: () => void;
+}
+
 interface DownloadTabViewProps {
   subtitles: SubtitleItem[];
   fileName: string;
@@ -58,6 +73,8 @@ interface DownloadTabViewProps {
   isGoogleTranslatingAll?: boolean;
   androidSaveMode?: AndroidSaveMode;
   onChangeAndroidSaveMode?: (mode: AndroidSaveMode) => void;
+  lastExportNotice?: LastExportNotice | null;
+  onDismissLastExportNotice?: () => void;
   onDownloadFormatted: (
     format: DownloadFormat,
     type: 'ai' | 'google' | 'original',
@@ -96,6 +113,8 @@ export const DownloadTabView: React.FC<DownloadTabViewProps> = ({
   isGoogleTranslatingAll = false,
   androidSaveMode = 'documents',
   onChangeAndroidSaveMode,
+  lastExportNotice = null,
+  onDismissLastExportNotice,
   onDownloadFormatted,
   onRefreshDownloadSession,
 }) => {
@@ -104,12 +123,24 @@ export const DownloadTabView: React.FC<DownloadTabViewProps> = ({
   const [isFormatMenuOpen, setIsFormatMenuOpen] = useState(false);
   const [selectedDirHandle, setSelectedDirHandle] = useState<any | null>(null);
   const [selectedDirName, setSelectedDirName] = useState<string>('');
+  const [androidExportFolder, setAndroidExportFolder] = useState<AndroidExportFolder | null>(() =>
+    getSelectedAndroidExportFolder()
+  );
+  const [isPickingAndroidFolder, setIsPickingAndroidFolder] = useState(false);
   const [folderStatusNote, setFolderStatusNote] = useState<string | null>(null);
   const [isExportOverlayOpen, setIsExportOverlayOpen] = useState(false);
 
   const nativeAndroid = isNativeAndroid();
   const supportsDirectoryPicker =
     typeof window !== 'undefined' && typeof (window as any).showDirectoryPicker === 'function';
+
+  useEffect(() => {
+    if (!nativeAndroid) return;
+    const syncFolder = () => setAndroidExportFolder(getSelectedAndroidExportFolder());
+    syncFolder();
+    window.addEventListener('urduLocalizerFolderPicked', syncFolder);
+    return () => window.removeEventListener('urduLocalizerFolderPicked', syncFolder);
+  }, [nativeAndroid]);
 
   useEffect(() => {
     let active = true;
@@ -138,8 +169,37 @@ export const DownloadTabView: React.FC<DownloadTabViewProps> = ({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [isExportOverlayOpen]);
 
+  useEffect(() => {
+    return registerBackHandler(() => {
+      if (isExportOverlayOpen) {
+        setIsExportOverlayOpen(false);
+        return true;
+      }
+      if (isFormatMenuOpen) {
+        setIsFormatMenuOpen(false);
+        return true;
+      }
+      return false;
+    });
+  }, [isExportOverlayOpen, isFormatMenuOpen]);
+
   const handleSelectExportFolder = async () => {
     setFolderStatusNote(null);
+    if (nativeAndroid) {
+      setIsPickingAndroidFolder(true);
+      try {
+        const picked = await pickAndroidExportFolder();
+        if (picked) {
+          setAndroidExportFolder(picked);
+          setFolderStatusNote(`Export folder set to "${picked.name}". Files save directly here.`);
+        } else {
+          setFolderStatusNote('No folder selected. Using current Android destination.');
+        }
+      } finally {
+        setIsPickingAndroidFolder(false);
+      }
+      return;
+    }
     if (!supportsDirectoryPicker) {
       setFolderStatusNote('Folder picker is not supported in this browser; Export uses Device Downloads / Share.');
       return;
@@ -159,6 +219,12 @@ export const DownloadTabView: React.FC<DownloadTabViewProps> = ({
   };
 
   const handleClearExportFolder = async () => {
+    if (nativeAndroid) {
+      clearAndroidExportFolder();
+      setAndroidExportFolder(null);
+      setFolderStatusNote('Cleared custom folder. Default: Documents/UrduLocalizer.');
+      return;
+    }
     setSelectedDirHandle(null);
     setSelectedDirName('');
     setFolderStatusNote(null);
@@ -432,7 +498,7 @@ export const DownloadTabView: React.FC<DownloadTabViewProps> = ({
                 <label className="text-[11px] font-semibold opacity-75 block">Destination Folder</label>
                 {nativeAndroid ? (
                   <div
-                    className="px-3 py-2.5 rounded-xl border space-y-2"
+                    className="px-3 py-2.5 rounded-xl border space-y-2.5"
                     style={{
                       backgroundColor: 'var(--theme-elevated)',
                       borderColor: 'var(--theme-border)',
@@ -445,16 +511,61 @@ export const DownloadTabView: React.FC<DownloadTabViewProps> = ({
                           <p className="text-xs font-semibold truncate">
                             {androidSaveMode === 'share'
                               ? 'Android Share / Save-As Sheet'
-                              : androidSaveMode === 'documents-and-share'
-                              ? 'Documents/UrduLocalizer + Share'
-                              : 'Documents/UrduLocalizer'}
+                              : androidExportFolder
+                              ? androidExportFolder.name
+                              : 'Documents/UrduLocalizer (Default)'}
                           </p>
-                          <p className="text-[10px] opacity-55 truncate">
-                            Native Android storage export with UTF-8 BOM
+                          <p className="text-[10px] opacity-60 truncate">
+                            {androidSaveMode === 'share'
+                              ? 'Opens system Share / Save-As picker on export'
+                              : androidExportFolder
+                              ? 'Saving directly inside your selected Android folder'
+                              : 'Tap Select Folder to choose Downloads or any custom folder'}
                           </p>
                         </div>
                       </div>
-                      {onChangeAndroidSaveMode && (
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {androidExportFolder && androidSaveMode !== 'share' && (
+                          <button
+                            type="button"
+                            onClick={handleClearExportFolder}
+                            className="min-h-[34px] w-8 rounded-lg border flex items-center justify-center cursor-pointer opacity-75 hover:opacity-100"
+                            style={{
+                              backgroundColor: 'var(--theme-surface)',
+                              borderColor: 'var(--theme-border)',
+                            }}
+                            title="Clear custom export folder"
+                            aria-label="Clear custom export folder"
+                          >
+                            <X size={13} />
+                          </button>
+                        )}
+                        {androidSaveMode !== 'share' && (
+                          <button
+                            type="button"
+                            onClick={handleSelectExportFolder}
+                            disabled={isPickingAndroidFolder}
+                            className="min-h-[34px] px-2.5 rounded-lg text-white text-[11px] font-semibold flex items-center justify-center gap-1.5 cursor-pointer touch-tactile btn-inch-cap disabled:opacity-60"
+                            style={{ backgroundColor: 'var(--theme-accent)' }}
+                          >
+                            {isPickingAndroidFolder ? (
+                              <Loader2 size={12} className="animate-spin shrink-0" />
+                            ) : (
+                              <FolderOpen size={12} className="shrink-0" />
+                            )}
+                            <span className="truncate">{androidExportFolder ? 'Change' : 'Select Folder'}</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {onChangeAndroidSaveMode && (
+                      <div
+                        className="pt-2 border-t flex items-center justify-between gap-2 flex-wrap"
+                        style={{ borderColor: 'var(--theme-border)' }}
+                      >
+                        <span className="text-[10.5px] opacity-70 font-medium">Export Behavior</span>
                         <select
                           aria-label="Android Export Mode"
                           value={androidSaveMode}
@@ -465,12 +576,12 @@ export const DownloadTabView: React.FC<DownloadTabViewProps> = ({
                             borderColor: 'var(--theme-border)',
                           }}
                         >
-                          <option value="documents">Documents Folder</option>
-                          <option value="documents-and-share">Documents + Share</option>
-                          <option value="share">Share Sheet Only</option>
+                          <option value="documents">Save to Folder</option>
+                          <option value="documents-and-share">Save to Folder + Share</option>
+                          <option value="share">Share / Save-As Only</option>
                         </select>
-                      )}
-                    </div>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div
@@ -527,7 +638,51 @@ export const DownloadTabView: React.FC<DownloadTabViewProps> = ({
                     </div>
                   </div>
                 )}
-                {folderStatusNote && <p className="text-[10px] opacity-70 px-1">{folderStatusNote}</p>}
+                {folderStatusNote && <p className="text-[10px] opacity-75 px-1">{folderStatusNote}</p>}
+              </div>
+            )}
+
+            {lastExportNotice && (
+              <div
+                className="p-3 rounded-xl border flex flex-wrap items-center justify-between gap-2"
+                style={{
+                  backgroundColor: 'rgba(16, 185, 129, 0.10)',
+                  borderColor: 'rgba(16, 185, 129, 0.35)',
+                }}
+              >
+                <div className="flex items-start gap-2 min-w-0 flex-1">
+                  <CheckCircle2 size={16} className="text-emerald-500 shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold truncate">Saved: {lastExportNotice.fileName}</p>
+                    <p className="text-[10.5px] opacity-80 truncate">
+                      Location: {lastExportNotice.locationLabel}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {lastExportNotice.onShareAgain && (
+                    <button
+                      type="button"
+                      onClick={lastExportNotice.onShareAgain}
+                      className="min-h-[32px] px-2.5 rounded-lg text-white text-[11px] font-semibold flex items-center gap-1 cursor-pointer touch-tactile"
+                      style={{ backgroundColor: 'var(--theme-accent)' }}
+                    >
+                      <Share2 size={12} />
+                      <span>Share / Open</span>
+                    </button>
+                  )}
+                  {onDismissLastExportNotice && (
+                    <button
+                      type="button"
+                      onClick={onDismissLastExportNotice}
+                      className="w-8 h-8 rounded-lg border flex items-center justify-center cursor-pointer opacity-70 hover:opacity-100"
+                      style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+                      aria-label="Dismiss saved notice"
+                    >
+                      <X size={12} />
+                    </button>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -676,19 +831,33 @@ export const DownloadTabView: React.FC<DownloadTabViewProps> = ({
                 </div>
                 {selectedFormat !== 'copy' && (
                   <div className="px-3 py-2 flex items-center justify-between gap-2">
-                    <span className="opacity-65 flex items-center gap-1.5">
+                    <span className="opacity-65 flex items-center gap-1.5 shrink-0">
                       <FolderOpen size={13} style={{ color: 'var(--theme-accent)' }} />
                       <span>Destination</span>
                     </span>
-                    <span className="font-semibold text-right truncate max-w-[200px]">
-                      {nativeAndroid
-                        ? androidSaveMode === 'share'
-                          ? 'Android Share Sheet'
-                          : androidSaveMode === 'documents-and-share'
-                          ? 'Documents/UrduLocalizer + Share'
-                          : 'Documents/UrduLocalizer'
-                        : selectedDirName || 'Device Downloads / Share'}
-                    </span>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="font-semibold text-right truncate max-w-[175px]">
+                        {nativeAndroid
+                          ? androidSaveMode === 'share'
+                            ? 'Android Share Sheet'
+                            : androidExportFolder
+                            ? `${androidExportFolder.name}${androidSaveMode === 'documents-and-share' ? ' + Share' : ''}`
+                            : androidSaveMode === 'documents-and-share'
+                            ? 'Documents/UrduLocalizer + Share'
+                            : 'Documents/UrduLocalizer'
+                          : selectedDirName || 'Device Downloads / Share'}
+                      </span>
+                      {nativeAndroid && androidSaveMode !== 'share' && (
+                        <button
+                          type="button"
+                          onClick={handleSelectExportFolder}
+                          className="text-[10.5px] font-semibold underline cursor-pointer shrink-0"
+                          style={{ color: 'var(--theme-accent-text)' }}
+                        >
+                          {androidExportFolder ? 'Change' : 'Choose'}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>

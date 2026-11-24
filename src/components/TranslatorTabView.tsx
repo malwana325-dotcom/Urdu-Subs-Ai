@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Sparkles,
   Languages,
@@ -20,11 +20,14 @@ import {
   ChevronRight,
   Edit3,
   Eye,
+  Gauge,
+  Square,
 } from 'lucide-react';
 import { GeminiQuotaDashboard } from './GeminiQuotaDashboard';
 import { InfoPopover } from './InfoPopover';
 import { FormattedRichText } from './FormattedRichText';
 import { GlossaryEntry } from '../services/appPreferences';
+import { registerBackHandler } from '../utils/backNavigation';
 import {
   TranslationSettings,
   TARGET_LANGUAGES,
@@ -67,9 +70,7 @@ interface TranslatorTabViewProps {
   workerStates: Record<string, { id: number; status: 'idle' | 'working' | 'completed'; currentItem?: number }>;
   isWorkerMonitorOpen: boolean;
   onToggleWorkerMonitor: () => void;
-  onStartTranslation: () => void;
   onStopTranslation: () => void;
-  onStartGoogleTranslate: () => void;
   onStopGoogleTranslate: () => void;
   onOpenTranslationSettings: () => void;
   onOpenAiConfig: () => void;
@@ -110,6 +111,8 @@ export const TranslatorTabView: React.FC<TranslatorTabViewProps> = ({
   workerStates,
   isWorkerMonitorOpen,
   onToggleWorkerMonitor,
+  onStopTranslation,
+  onStopGoogleTranslate,
   onOpenTranslationSettings,
   onOpenAiConfig,
   onOpenGoogleConfig,
@@ -135,6 +138,24 @@ export const TranslatorTabView: React.FC<TranslatorTabViewProps> = ({
     glossary: false,
   });
 
+  useEffect(() => {
+    return registerBackHandler(() => {
+      if (contextEditMode) {
+        setContextEditMode(false);
+        return true;
+      }
+      if (instructionsEditMode) {
+        setInstructionsEditMode(false);
+        return true;
+      }
+      if (isWorkerMonitorOpen) {
+        onToggleWorkerMonitor();
+        return true;
+      }
+      return false;
+    });
+  }, [contextEditMode, instructionsEditMode, isWorkerMonitorOpen, onToggleWorkerMonitor]);
+
   const handleAddGlossaryEntry = (e: React.FormEvent) => {
     e.preventDefault();
     if (!sourceTermInput.trim() || !targetTermInput.trim()) return;
@@ -154,8 +175,23 @@ export const TranslatorTabView: React.FC<TranslatorTabViewProps> = ({
   const toneObj = TONE_REGISTERS.find((t) => t.id === translationSettings.toneRegister);
   const honorificObj = HONORIFIC_OPTIONS.find((h) => h.id === translationSettings.honorificRegister);
 
+  const aiPending = Math.max(0, subtitlesCount - translatedCount);
+  const aiPercent = subtitlesCount > 0 ? Math.round((translatedCount / subtitlesCount) * 100) : 0;
+  const googlePercent = subtitlesCount > 0 ? Math.round((googleCount / subtitlesCount) * 100) : 0;
+  const etaSeconds =
+    isTranslating && translationSpeed > 0 && aiPending > 0
+      ? Math.ceil(aiPending / translationSpeed)
+      : null;
+
+  const workerEntries = Object.values(workerStates) as Array<{
+    id: number;
+    status: 'idle' | 'working' | 'completed';
+    currentItem?: number;
+  }>;
+  const activeWorkersCount = workerEntries.filter((w) => w.status === 'working').length;
+
   return (
-    <div className="space-y-3 max-w-5xl mx-auto w-full pb-44">
+    <div className="space-y-3 max-w-5xl mx-auto w-full pb-36">
       {/* Primary Translation Status & Engine Links (Primary action buttons stacked bottom-right) */}
       <div
         className="rounded-xl border space-y-2.5 theme-card"
@@ -616,6 +652,124 @@ export const TranslatorTabView: React.FC<TranslatorTabViewProps> = ({
           )}
         </div>
       )}
+
+      {/* Progress Tracking Bar (Bottom of Translation Tab) */}
+      <section
+        className="rounded-xl border space-y-2.5 theme-card"
+        style={{
+          backgroundColor: 'var(--theme-surface)',
+          borderColor: 'var(--theme-border)',
+          padding: 'var(--card-pad)',
+        }}
+      >
+        <div className="flex items-center justify-between gap-2 text-[11px] font-semibold">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <Gauge size={14} style={{ color: 'var(--theme-accent)' }} className="shrink-0" />
+            <span className="truncate">Live Progress</span>
+            <InfoPopover
+              title="Translation Progress"
+              description="Live Gemini AI and Neutral progress, active workers, and ETA. Swipe left from the right edge to open the parameters drawer."
+              align="left"
+            />
+          </div>
+          <span className="font-mono text-[10.5px] opacity-75 tabular-nums shrink-0">
+            {isTranslating || isGoogleTranslatingAll ? `${translationSpeed} lines/s` : 'Idle'}
+            {etaSeconds !== null ? ` · ~${etaSeconds}s ETA` : ''}
+          </span>
+        </div>
+
+        <div className="space-y-1">
+          <div className="flex justify-between text-[11px] font-mono tabular-nums">
+            <span>Gemini AI</span>
+            <span>
+              {translatedCount}/{subtitlesCount} ({aiPercent}%) · {aiPending} left
+            </span>
+          </div>
+          <div className="h-2 w-full rounded-full overflow-hidden bg-black/15 dark:bg-white/10">
+            <div
+              className="h-full transition-all duration-200"
+              style={{ width: `${aiPercent}%`, backgroundColor: 'var(--theme-accent)' }}
+            />
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          <div className="flex justify-between text-[11px] font-mono tabular-nums">
+            <span>Neutral / Google</span>
+            <span>
+              {googleCount}/{subtitlesCount} ({googlePercent}%)
+            </span>
+          </div>
+          <div className="h-1.5 w-full rounded-full overflow-hidden bg-black/15 dark:bg-white/10">
+            <div
+              className="h-full transition-all duration-200 bg-sky-400"
+              style={{ width: `${googlePercent}%` }}
+            />
+          </div>
+        </div>
+
+        {workerEntries.length > 0 && (
+          <div className="pt-2 border-t space-y-1.5" style={{ borderColor: 'var(--theme-border)' }}>
+            <div className="flex items-center justify-between text-[10.5px] opacity-75 font-mono tabular-nums">
+              <span>Workers ({activeWorkersCount}/{workerEntries.length} active)</span>
+              {adaptiveScalingEnabled && (
+                <span>
+                  {activeAdaptiveInfo.throttled ? 'Throttled · ' : ''}
+                  {activeAdaptiveInfo.workers}w · {activeAdaptiveInfo.delay}ms
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+              {workerEntries.map((w) => (
+                <div
+                  key={w.id}
+                  className="px-2 py-1 rounded border text-[10px] font-mono tabular-nums flex items-center justify-between"
+                  style={{
+                    backgroundColor:
+                      w.status === 'working' ? 'var(--theme-accent-soft)' : 'var(--theme-elevated)',
+                    borderColor:
+                      w.status === 'working' ? 'var(--theme-accent)' : 'var(--theme-border)',
+                  }}
+                >
+                  <span>W{w.id}</span>
+                  <span className="opacity-75">
+                    {w.status === 'working'
+                      ? `#${w.currentItem ?? '...'}`
+                      : w.status === 'completed'
+                      ? 'Done'
+                      : 'Idle'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {(isTranslating || isGoogleTranslatingAll) && (
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            {isTranslating && (
+              <button
+                type="button"
+                onClick={onStopTranslation}
+                className="min-h-[36px] px-3 rounded-lg bg-red-600 text-white text-[11px] font-semibold flex items-center justify-center gap-1.5 cursor-pointer touch-tactile"
+              >
+                <Square size={12} className="shrink-0" />
+                <span className="tabular-nums">Stop AI ({aiPercent}%)</span>
+              </button>
+            )}
+            {isGoogleTranslatingAll && (
+              <button
+                type="button"
+                onClick={onStopGoogleTranslate}
+                className="min-h-[36px] px-3 rounded-lg bg-red-600 text-white text-[11px] font-semibold flex items-center justify-center gap-1.5 cursor-pointer touch-tactile"
+              >
+                <Square size={12} className="shrink-0" />
+                <span className="tabular-nums">Stop Neutral ({googlePercent}%)</span>
+              </button>
+            )}
+          </div>
+        )}
+      </section>
     </div>
   );
 };

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import {
   FolderOpen,
   Globe,
@@ -26,6 +26,7 @@ import {
 } from '../services/androidNative';
 import { InfoPopover } from './InfoPopover';
 import { ConfirmDialogModal } from './ConfirmDialogModal';
+import { registerBackHandler } from '../utils/backNavigation';
 import { cn } from '../utils/cn';
 
 interface HomeTabViewProps {
@@ -141,6 +142,14 @@ export const HomeTabView: React.FC<HomeTabViewProps> = ({
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirmAction>(null);
   const [tagFilter, setTagFilter] = useState<string>('All');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!pendingConfirm) return;
+    return registerBackHandler(() => {
+      setPendingConfirm(null);
+      return true;
+    });
+  }, [pendingConfirm]);
 
   const hasAnySubtitlesInApp = subtitlesCount > 0 || drafts.length > 0;
 

@@ -9,12 +9,20 @@ import { Network } from '@capacitor/network';
 export type AndroidPermissionState = 'granted' | 'denied' | 'prompt' | 'prompt-with-rationale' | 'scoped' | 'web';
 export type AndroidSaveMode = 'documents' | 'documents-and-share' | 'share';
 
+export interface AndroidExportFolder {
+  uri: string;
+  name: string;
+}
+
 export interface AndroidPermissionSnapshot {
   isNativeAndroid: boolean;
   platform: string;
   sdkInt: number | null;
   appVersion: string;
   publicStorage: AndroidPermissionState;
+  hasLegacyPermission: boolean;
+  needsRuntimePrompt: boolean;
+  exportFolder: AndroidExportFolder | null;
   networkConnected: boolean;
   networkType: string;
   canOpenAppSettings: boolean;
@@ -26,11 +34,34 @@ export interface IncomingAndroidFilePayload {
   content: string;
 }
 
+export interface NativeAndroidExportResult {
+  success: boolean;
+  fileName?: string;
+  folderName?: string;
+  savedPath?: string;
+  savedUri?: string;
+  shared?: boolean;
+  error?: string;
+}
+
 interface AndroidHostBridgeApi {
   consumePendingSubtitleIntent?: () => string;
   openAppSettings?: () => void;
   getSdkInt?: () => number;
   getAppVersionName?: () => string;
+  hasStoragePermission?: () => boolean;
+  needsLegacyRuntimePermission?: () => boolean;
+  requestStoragePermissionsNow?: () => void;
+  pickExportFolder?: () => void;
+  getSelectedExportFolderJson?: () => string;
+  clearSelectedExportFolder?: () => void;
+  writeFileToSelectedFolder?: (fileName: string, content: string, mimeType: string) => string;
+}
+
+declare global {
+  interface Window {
+    __urduLocalizerHandleBack?: () => boolean;
+  }
 }
 
 function getHostBridge(): AndroidHostBridgeApi | null {
@@ -109,6 +140,66 @@ export function consumePendingAndroidSubtitleFile(): IncomingAndroidFilePayload 
   return null;
 }
 
+export function getSelectedAndroidExportFolder(): AndroidExportFolder | null {
+  if (!isNativeAndroid()) return null;
+  const bridge = getHostBridge();
+  if (!bridge?.getSelectedExportFolderJson) return null;
+  try {
+    const raw = bridge.getSelectedExportFolderJson();
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.uri === 'string' && parsed.uri.trim()) {
+      return {
+        uri: parsed.uri,
+        name: String(parsed.name || 'Selected Folder'),
+      };
+    }
+  } catch {
+    // Ignore JSON parse errors
+  }
+  return null;
+}
+
+export function clearAndroidExportFolder(): void {
+  const bridge = getHostBridge();
+  try {
+    bridge?.clearSelectedExportFolder?.();
+  } catch {
+    // Ignore errors
+  }
+}
+
+export function pickAndroidExportFolder(): Promise<AndroidExportFolder | null> {
+  if (!isNativeAndroid()) return Promise.resolve(null);
+  const bridge = getHostBridge();
+  if (!bridge?.pickExportFolder) return Promise.resolve(null);
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (folder: AndroidExportFolder | null) => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener('urduLocalizerFolderPicked', onPicked);
+      window.removeEventListener('urduLocalizerFolderCanceled', onCanceled);
+      clearTimeout(safetyTimer);
+      resolve(folder);
+    };
+
+    const onPicked = () => finish(getSelectedAndroidExportFolder());
+    const onCanceled = () => finish(null);
+    const safetyTimer = setTimeout(() => finish(getSelectedAndroidExportFolder()), 120000);
+
+    window.addEventListener('urduLocalizerFolderPicked', onPicked);
+    window.addEventListener('urduLocalizerFolderCanceled', onCanceled);
+
+    try {
+      bridge.pickExportFolder?.();
+    } catch {
+      finish(null);
+    }
+  });
+}
+
 export async function getAndroidPermissionSnapshot(): Promise<AndroidPermissionSnapshot> {
   const nativeAndroid = isNativeAndroid();
   const buildInfo = getAndroidBuildInfo();
@@ -134,6 +225,9 @@ export async function getAndroidPermissionSnapshot(): Promise<AndroidPermissionS
       sdkInt: null,
       appVersion: buildInfo.appVersion,
       publicStorage: 'web',
+      hasLegacyPermission: true,
+      needsRuntimePrompt: false,
+      exportFolder: null,
       networkConnected,
       networkType,
       canOpenAppSettings: false,
@@ -141,18 +235,37 @@ export async function getAndroidPermissionSnapshot(): Promise<AndroidPermissionS
     };
   }
 
+  const exportFolder = getSelectedAndroidExportFolder();
+  let needsRuntimePrompt = false;
+  let hasLegacyPermission = true;
+  try {
+    if (bridge?.needsLegacyRuntimePermission) {
+      needsRuntimePrompt = Boolean(bridge.needsLegacyRuntimePermission());
+    }
+    if (bridge?.hasStoragePermission) {
+      hasLegacyPermission = Boolean(bridge.hasStoragePermission());
+    }
+  } catch {
+    // Ignore native bridge error
+  }
+
   let publicStorage: AndroidPermissionState = 'prompt';
   try {
     const status = await Filesystem.checkPermissions();
     const raw = status?.publicStorage || 'prompt';
-    if (buildInfo.sdkInt !== null && buildInfo.sdkInt >= 33 && raw !== 'granted') {
-      // Android 13+ uses Scoped Storage / SAF without legacy WRITE_EXTERNAL_STORAGE runtime dialog
-      publicStorage = 'scoped';
+    if (buildInfo.sdkInt !== null && buildInfo.sdkInt >= 33) {
+      publicStorage = exportFolder ? 'granted' : 'scoped';
+    } else if (raw === 'granted' || !needsRuntimePrompt) {
+      publicStorage = 'granted';
     } else {
       publicStorage = raw as AndroidPermissionState;
     }
   } catch {
-    publicStorage = buildInfo.sdkInt !== null && buildInfo.sdkInt >= 33 ? 'scoped' : 'prompt';
+    if (buildInfo.sdkInt !== null && buildInfo.sdkInt >= 33) {
+      publicStorage = exportFolder ? 'granted' : 'scoped';
+    } else {
+      publicStorage = needsRuntimePrompt ? 'prompt' : 'granted';
+    }
   }
 
   return {
@@ -161,6 +274,9 @@ export async function getAndroidPermissionSnapshot(): Promise<AndroidPermissionS
     sdkInt: buildInfo.sdkInt,
     appVersion: buildInfo.appVersion,
     publicStorage,
+    hasLegacyPermission,
+    needsRuntimePrompt,
+    exportFolder,
     networkConnected,
     networkType,
     canOpenAppSettings: Boolean(bridge?.openAppSettings),
@@ -196,11 +312,36 @@ export async function requestAndroidStoragePermission(): Promise<{
   }
 
   const buildInfo = getAndroidBuildInfo();
-  try {
-    const res = await Filesystem.requestPermissions();
-    const state = (res?.publicStorage || 'prompt') as AndroidPermissionState;
+  const bridge = getHostBridge();
 
-    if (state === 'granted') {
+  // Trigger native Android runtime storage dialog on Android <= 12 (API <= 32)
+  if (bridge?.requestStoragePermissionsNow && bridge?.needsLegacyRuntimePermission?.()) {
+    await new Promise<void>((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        window.removeEventListener('urduLocalizerPermissionsChanged', finish);
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(finish, 30000);
+      window.addEventListener('urduLocalizerPermissionsChanged', finish);
+      try {
+        bridge.requestStoragePermissionsNow?.();
+      } catch {
+        finish();
+      }
+    });
+  }
+
+  try {
+    const res = await Filesystem.requestPermissions().catch(() => ({ publicStorage: 'prompt' }));
+    const rawState = (res?.publicStorage || 'prompt') as AndroidPermissionState;
+    const stillNeedsLegacy = Boolean(bridge?.needsLegacyRuntimePermission?.());
+    const folder = getSelectedAndroidExportFolder();
+
+    if (rawState === 'granted' || (!stillNeedsLegacy && buildInfo.sdkInt !== null && buildInfo.sdkInt < 33)) {
       return {
         granted: true,
         state: 'granted',
@@ -211,18 +352,19 @@ export async function requestAndroidStoragePermission(): Promise<{
     if (buildInfo.sdkInt !== null && buildInfo.sdkInt >= 33) {
       return {
         granted: true,
-        state: 'scoped',
-        message:
-          'Android 13+ uses Scoped Storage. File loading & Documents/UrduLocalizer export work without legacy permissions.',
+        state: folder ? 'granted' : 'scoped',
+        message: folder
+          ? `Export folder ready: "${folder.name}".`
+          : 'Android 13+ uses Scoped Storage. Choose an Export Folder (such as Downloads) to save files directly.',
       };
     }
 
     return {
       granted: false,
-      state,
+      state: rawState,
       message:
-        state === 'denied'
-          ? 'Storage permission was denied. Open Android App Settings to allow Files access, or use Android Share export.'
+        rawState === 'denied'
+          ? 'Storage permission was denied. Allow Files permission in Android Settings or select an Export Folder.'
           : 'Storage permission not granted yet.',
     };
   } catch (err: any) {
@@ -230,7 +372,7 @@ export async function requestAndroidStoragePermission(): Promise<{
       return {
         granted: true,
         state: 'scoped',
-        message: 'Scoped Storage active for subtitle Documents & Share export.',
+        message: 'Scoped Storage active — select an Export Folder or use Share export.',
       };
     }
     return {
@@ -241,67 +383,120 @@ export async function requestAndroidStoragePermission(): Promise<{
   }
 }
 
+function guessMimeType(fileName: string): string {
+  const lower = fileName.toLowerCase();
+  if (lower.endsWith('.json')) return 'application/json';
+  if (lower.endsWith('.vtt')) return 'text/vtt';
+  if (lower.endsWith('.srt')) return 'application/x-subrip';
+  return 'text/plain';
+}
+
+export async function shareExportedAndroidSubtitle(fileName: string, content: string): Promise<boolean> {
+  if (!isNativeAndroid()) return false;
+  const safeName = (fileName || 'subtitles.srt').replace(/[\\/:*?"<>|]/g, '_');
+  const bomContent = content.startsWith('\ufeff') ? content : `\ufeff${content}`;
+  try {
+    const cacheWrite = await Filesystem.writeFile({
+      path: safeName,
+      data: bomContent,
+      directory: Directory.Cache,
+      encoding: Encoding.UTF8,
+      recursive: true,
+    });
+    const shareUri =
+      cacheWrite.uri ||
+      (await Filesystem.getUri({ path: safeName, directory: Directory.Cache })).uri;
+
+    await Share.share({
+      title: safeName,
+      text: `Exported subtitle file (${safeName})`,
+      url: shareUri,
+      dialogTitle: 'Save or Share Subtitle File',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function exportSubtitleNativeAndroid(options: {
   fileName: string;
   content: string;
   saveMode: AndroidSaveMode;
-}): Promise<{
-  success: boolean;
-  savedPath?: string;
-  shared?: boolean;
-  error?: string;
-}> {
+}): Promise<NativeAndroidExportResult> {
   const safeName = (options.fileName || 'subtitles.srt').replace(/[\\/:*?"<>|]/g, '_');
   const bomContent = options.content.startsWith('\ufeff') ? options.content : `\ufeff${options.content}`;
-
-  // Ensure permission on Android <= 12 before writing to public Documents
-  const permSnapshot = await getAndroidPermissionSnapshot();
-  if (permSnapshot.publicStorage !== 'granted' && permSnapshot.publicStorage !== 'scoped') {
-    await requestAndroidStoragePermission();
-  }
+  const bridge = getHostBridge();
 
   let savedRelativePath: string | undefined;
+  let savedFolderName: string | undefined;
+  let savedUri: string | undefined;
   let shareUri: string | undefined;
 
-  // Step 1: Write to Documents/UrduLocalizer when mode includes documents
   if (options.saveMode === 'documents' || options.saveMode === 'documents-and-share') {
-    const targetPath = `UrduLocalizer/${safeName}`;
-    try {
-      await Filesystem.mkdir({
-        path: 'UrduLocalizer',
-        directory: Directory.Documents,
-        recursive: true,
-      }).catch(() => {});
-
-      const writeRes = await Filesystem.writeFile({
-        path: targetPath,
-        data: bomContent,
-        directory: Directory.Documents,
-        encoding: Encoding.UTF8,
-        recursive: true,
-      });
-
-      savedRelativePath = `Documents/UrduLocalizer/${safeName}`;
-      shareUri = writeRes.uri;
-    } catch {
-      // Fallback to app external storage if public Documents write is restricted on device OEM
+    // 1. Prefer user-chosen Android Export Folder (SAF ACTION_OPEN_DOCUMENT_TREE)
+    const selectedFolder = getSelectedAndroidExportFolder();
+    if (selectedFolder && bridge?.writeFileToSelectedFolder) {
       try {
-        const extRes = await Filesystem.writeFile({
+        const rawRes = bridge.writeFileToSelectedFolder(safeName, bomContent, guessMimeType(safeName));
+        const parsed = JSON.parse(rawRes || '{}');
+        if (parsed?.success) {
+          savedFolderName = String(parsed.folderName || selectedFolder.name);
+          savedRelativePath = `${savedFolderName}/${safeName}`;
+          savedUri = parsed.uri;
+        }
+      } catch {
+        // Fall through to Documents fallback
+      }
+    }
+
+    // 2. Fallback to Documents/UrduLocalizer if no custom SAF folder was picked
+    if (!savedRelativePath) {
+      const permSnapshot = await getAndroidPermissionSnapshot();
+      if (permSnapshot.needsRuntimePrompt) {
+        await requestAndroidStoragePermission();
+      }
+
+      const targetPath = `UrduLocalizer/${safeName}`;
+      try {
+        await Filesystem.mkdir({
+          path: 'UrduLocalizer',
+          directory: Directory.Documents,
+          recursive: true,
+        }).catch(() => {});
+
+        const writeRes = await Filesystem.writeFile({
           path: targetPath,
           data: bomContent,
-          directory: Directory.External,
+          directory: Directory.Documents,
           encoding: Encoding.UTF8,
           recursive: true,
         });
-        savedRelativePath = `Android/data/com.urdudubber.app/files/UrduLocalizer/${safeName}`;
-        shareUri = extRes.uri;
+
+        savedFolderName = 'Documents/UrduLocalizer';
+        savedRelativePath = `Documents/UrduLocalizer/${safeName}`;
+        savedUri = writeRes.uri;
+        shareUri = writeRes.uri;
       } catch {
-        // Will fall back to Cache + Share sheet below
+        try {
+          const extRes = await Filesystem.writeFile({
+            path: targetPath,
+            data: bomContent,
+            directory: Directory.External,
+            encoding: Encoding.UTF8,
+            recursive: true,
+          });
+          savedFolderName = 'Android/data/com.urdudubber.app/files/UrduLocalizer';
+          savedRelativePath = `${savedFolderName}/${safeName}`;
+          savedUri = extRes.uri;
+          shareUri = extRes.uri;
+        } catch {
+          // Will fall back to Share sheet below
+        }
       }
     }
   }
 
-  // Step 2: Open Share / Save-As Sheet if requested OR if Documents write failed
   const shouldShare =
     options.saveMode === 'share' ||
     options.saveMode === 'documents-and-share' ||
@@ -336,22 +531,21 @@ export async function exportSubtitleNativeAndroid(options: {
 
       return {
         success: true,
+        fileName: safeName,
+        folderName: savedFolderName,
         savedPath: savedRelativePath,
+        savedUri,
         shared: true,
       };
     } catch (shareErr: any) {
       const msg = String(shareErr?.message || '');
-      if (/cancel/i.test(msg) && savedRelativePath) {
-        return {
-          success: true,
-          savedPath: savedRelativePath,
-          shared: false,
-        };
-      }
       if (savedRelativePath) {
         return {
           success: true,
+          fileName: safeName,
+          folderName: savedFolderName,
           savedPath: savedRelativePath,
+          savedUri,
           shared: false,
         };
       }
@@ -365,14 +559,17 @@ export async function exportSubtitleNativeAndroid(options: {
   if (savedRelativePath) {
     return {
       success: true,
+      fileName: safeName,
+      folderName: savedFolderName,
       savedPath: savedRelativePath,
+      savedUri,
       shared: false,
     };
   }
 
   return {
     success: false,
-    error: 'Failed to write subtitle file to Android storage.',
+    error: 'Failed to write subtitle file to Android storage. Select an Export Folder and try again.',
   };
 }
 
@@ -391,13 +588,19 @@ export function initAndroidNativeShell(handlers: {
   isLightTheme: boolean;
   onKeyboardChange: (visible: boolean) => void;
   onNetworkChange: (connected: boolean) => void;
-  onBackButton: () => boolean; // returns true if handled in-app, false to minimize/exit
+  onBackButton: () => boolean;
   onIncomingFile: (payload: IncomingAndroidFilePayload) => void;
 }): () => void {
   const cleanups: (() => void)[] = [];
 
   if (isNativeAndroid()) {
     void syncAndroidStatusBarTheme(handlers.isLightTheme);
+
+    // Expose synchronous back bridge for MainActivity OnBackPressedCallback
+    window.__urduLocalizerHandleBack = () => handlers.onBackButton();
+    cleanups.push(() => {
+      delete window.__urduLocalizerHandleBack;
+    });
 
     // Check if launched via Open With / Share intent
     const initialFile = consumePendingAndroidSubtitleFile();
@@ -427,14 +630,17 @@ export function initAndroidNativeShell(handlers: {
       cleanups.push(() => { void h.remove(); })
     ).catch(() => {});
 
-    void CapApp.addListener('backButton', () => {
-      const handled = handlers.onBackButton();
-      if (!handled) {
-        void CapApp.minimizeApp().catch(() => {
-          void CapApp.exitApp().catch(() => {});
-        });
-      }
-    }).then((h) => cleanups.push(() => { void h.remove(); })).catch(() => {});
+    // Fallback Capacitor back listener ONLY if MainActivity native bridge isn't attached
+    if (!getHostBridge()) {
+      void CapApp.addListener('backButton', () => {
+        const handled = handlers.onBackButton();
+        if (!handled) {
+          void CapApp.minimizeApp().catch(() => {
+            void CapApp.exitApp().catch(() => {});
+          });
+        }
+      }).then((h) => cleanups.push(() => { void h.remove(); })).catch(() => {});
+    }
   }
 
   void Network.addListener('networkStatusChange', (status) => {
