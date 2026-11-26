@@ -2,12 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { X, Cpu, Loader2 } from 'lucide-react';
 import { cn } from '../utils/cn';
 import { InfoPopover } from './InfoPopover';
+import { AI_MODEL_CATALOG, CustomAiModelConfig } from '../services/aiProviders';
 
 interface AiConfigModalProps {
   isOpen: boolean;
   onClose: () => void;
   selectedModel: string;
   onUpdateModel: (model: string) => void;
+  customModels?: CustomAiModelConfig[];
   onConnectGemini: (overrideModel?: string) => Promise<boolean | void>;
   connectStatus: 'idle' | 'loading' | 'success' | 'failed';
   isGeminiConnected: boolean;
@@ -23,19 +25,12 @@ interface AiConfigModalProps {
   onAddNotification: (msg: string, type: 'success' | 'error') => void;
 }
 
-const GEMINI_MODELS = [
-  { id: 'gemini-4-hydrogen', name: 'Gemini 4 Hydrogen / Flash' },
-  { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite' },
-  { id: 'gemini-4-neon', name: 'Gemini 4 Neon / Pro' },
-  { id: 'gemini-4-carbon', name: 'Gemini 4 Carbon' },
-  { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro Preview' },
-];
-
 export const AiConfigModal: React.FC<AiConfigModalProps> = ({
   isOpen,
   onClose,
   selectedModel,
   onUpdateModel,
+  customModels = [],
   onConnectGemini,
   connectStatus,
   isGeminiConnected,
@@ -68,6 +63,11 @@ export const AiConfigModal: React.FC<AiConfigModalProps> = ({
 
   if (!isOpen) return null;
 
+  const allModels = [
+    ...AI_MODEL_CATALOG.map((m) => ({ id: m.id, name: `${m.providerLabel} · ${m.name}` })),
+    ...customModels.map((c) => ({ id: c.id, name: `Custom · ${c.name} (${c.modelId})` })),
+  ];
+
   const handleSave = async () => {
     onUpdateModel(modelInput);
     onUpdateWorkers(workersInput);
@@ -80,21 +80,21 @@ export const AiConfigModal: React.FC<AiConfigModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-[115] flex items-center justify-center p-3 bg-black/75 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[115] flex items-center justify-center p-3 bg-black/58 backdrop-touch-lock">
       <div
-        className="border rounded-xl shadow-2xl max-w-[calc(100vw-24px)] sm:max-w-lg w-full max-h-[calc(100dvh-24px)] overflow-hidden text-xs flex flex-col"
+        className="border rounded-xl shadow-2xl max-w-[calc(100vw-24px)] sm:max-w-lg w-full max-h-[calc(100dvh-24px)] overflow-hidden text-xs flex flex-col anim-pop-in mc-popup mc-role-ai"
         style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)', color: 'var(--theme-text)' }}
       >
         <div
-          className="px-3.5 py-2.5 border-b flex items-center justify-between shrink-0"
+          className="px-3.5 py-2.5 border-b flex items-center justify-between shrink-0 mc-popup-header"
           style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
         >
           <div className="flex items-center gap-2">
-            <Cpu size={15} style={{ color: 'var(--theme-accent)' }} />
-            <h2 className="font-semibold text-sm">AI Configuration</h2>
+            <Cpu size={15} style={{ color: 'var(--theme-accent)' }} className="mc-popup-title" />
+            <h2 className="font-semibold text-sm mc-popup-title">AI Configuration</h2>
             <InfoPopover
-              title="Gemini Engine Configuration"
-              description="Select Gemini foundation model, verify API key connection, and adjust worker concurrency, batch size, and adaptive rate throttling."
+              title="AI Engine Configuration"
+              description="Select any built-in or custom AI model, verify connection, and adjust worker concurrency, batch size, and adaptive throttling."
             />
           </div>
           <button type="button" onClick={onClose} className="p-1.5 rounded-lg opacity-60 hover:opacity-100 cursor-pointer">
@@ -104,9 +104,9 @@ export const AiConfigModal: React.FC<AiConfigModalProps> = ({
 
         <div className="p-3.5 space-y-3 overflow-y-auto">
           <div className="space-y-1.5">
-            <label className="font-semibold text-[11px] block">Model</label>
-            <div className="space-y-1">
-              {GEMINI_MODELS.map((m) => (
+            <label className="font-semibold text-[11px] block">Model / Engine</label>
+            <div className="space-y-1 max-h-52 overflow-y-auto pr-1">
+              {allModels.map((m) => (
                 <label
                   key={m.id}
                   className="flex items-center gap-2.5 p-2 rounded-lg border cursor-pointer"
@@ -193,7 +193,7 @@ export const AiConfigModal: React.FC<AiConfigModalProps> = ({
         </div>
 
         <div
-          className="px-3.5 py-2.5 border-t flex items-center justify-end gap-2 shrink-0"
+          className="px-3.5 py-2.5 border-t flex items-center justify-end gap-2 shrink-0 mc-popup-footer"
           style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
         >
           <button

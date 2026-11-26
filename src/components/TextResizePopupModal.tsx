@@ -80,7 +80,7 @@ export const TextResizePopupModal: React.FC<TextResizePopupModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-[150] bg-black/55 backdrop-blur-[2px] flex items-center justify-center p-3 backdrop-touch-lock"
+      className="fixed inset-0 z-[150] bg-black/58 flex items-center justify-center p-3 backdrop-touch-lock"
       onClick={(e) => {
         e.stopPropagation();
         onClose();
@@ -90,7 +90,7 @@ export const TextResizePopupModal: React.FC<TextResizePopupModalProps> = ({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="border rounded-xl shadow-2xl w-full max-w-[min(420px,calc(100vw-24px))] max-h-[calc(100dvh-24px)] flex flex-col overflow-hidden text-xs overscroll-contain"
+        className="border rounded-xl shadow-2xl w-full max-w-[min(420px,calc(100vw-24px))] max-h-[calc(100dvh-24px)] flex flex-col overflow-hidden text-xs overscroll-contain mc-popup mc-role-style anim-pop-in"
         style={{
           backgroundColor: 'var(--theme-surface)',
           borderColor: 'var(--theme-border)',
@@ -99,12 +99,12 @@ export const TextResizePopupModal: React.FC<TextResizePopupModalProps> = ({
       >
         {/* Clean Header */}
         <div
-          className="px-3.5 py-2.5 border-b flex items-center justify-between gap-2 shrink-0"
+          className="px-3.5 py-2.5 border-b flex items-center justify-between gap-2 shrink-0 mc-popup-header"
           style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
         >
           <div className="flex items-center gap-2 min-w-0">
-            <TypeIcon size={15} style={{ color: 'var(--theme-accent)' }} className="shrink-0" />
-            <h3 className="font-semibold text-xs truncate">Text Size</h3>
+            <TypeIcon size={15} style={{ color: 'var(--theme-accent)' }} className="shrink-0 mc-popup-title" />
+            <h3 className="font-semibold text-xs truncate mc-popup-title">Text Size</h3>
             {isDirty && (
               <span className="text-[10px] font-semibold text-amber-500">· Draft</span>
             )}
@@ -298,7 +298,7 @@ export const TextResizePopupModal: React.FC<TextResizePopupModalProps> = ({
 
         {/* Footer */}
         <div
-          className="px-3.5 py-2.5 border-t flex items-center justify-between gap-2 shrink-0"
+          className="px-3.5 py-2.5 border-t flex items-center justify-between gap-2 shrink-0 mc-popup-footer"
           style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
         >
           <button

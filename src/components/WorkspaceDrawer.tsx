@@ -149,17 +149,17 @@ export const WorkspaceDrawer: React.FC<WorkspaceDrawerProps> = ({
 }) => {
 
   return (
-    <RightEdgeDrawerShell isOpen={isOpen} onClose={onClose} widthClass="w-[min(92vw,375px)]">
+    <RightEdgeDrawerShell isOpen={isOpen} onClose={onClose} widthClass="w-[min(92vw,375px)]" roleVariant="edit">
         {/* Header */}
         <div
-          className="px-3 py-2.5 border-b flex items-center justify-between gap-2 shrink-0"
+          className="px-3 py-2.5 border-b flex items-center justify-between gap-2 shrink-0 mc-popup-header"
           style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
         >
           <div className="flex items-center gap-2 min-w-0">
-            <Sliders size={16} style={{ color: 'var(--theme-accent)' }} className="shrink-0" />
+            <Sliders size={16} style={{ color: 'var(--theme-accent)' }} className="shrink-0 mc-popup-title" />
             <div className="min-w-0">
               <div className="flex items-center gap-1">
-                <h2 className="text-xs font-semibold truncate">Workspace Tools</h2>
+                <h2 className="text-xs font-semibold truncate mc-popup-title">Workspace Tools</h2>
                 <InfoPopover
                   title="Workspace Tools Drawer"
                   description="All search, selection, editing, timing, column visibility, view layout, typography, and history utilities for the active subtitle table."

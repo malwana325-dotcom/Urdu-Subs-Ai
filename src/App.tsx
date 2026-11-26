@@ -64,6 +64,7 @@ import {
   Clapperboard,
   Play,
   ChevronDown,
+  ChevronUp,
   Info,
   Cpu,
   Globe,
@@ -113,6 +114,19 @@ import {
   setStoredGeminiApiKey,
   clearStoredGeminiApiKey,
 } from './services/gemini';
+import {
+  CustomAiModelConfig,
+  getStoredCustomModels,
+  saveStoredCustomModels,
+  getApiKeyForModel,
+  setApiKeyForModel,
+  resolveAiModel,
+  testAiModelConnection,
+  translateBatchUnified,
+  generateContextUnified,
+  suggestShortFileNameUnified,
+  isGeminiModelId,
+} from './services/aiProviders';
 import { GeminiQuotaDashboard } from './components/GeminiQuotaDashboard';
 import { SubtitleStylizerModal } from './components/SubtitleStylizerModal';
 import { TranslationSettingsModal } from './components/TranslationSettingsModal';
@@ -132,9 +146,17 @@ import { HomeTabView } from './components/HomeTabView';
 import { MobileSubtitleCard, WorkspaceStreamField } from './components/MobileSubtitleCard';
 import { TranslatorTabView } from './components/TranslatorTabView';
 import { StylingTabView } from './components/StylingTabView';
-import { DownloadTabView, DownloadFormat, LastExportNotice } from './components/DownloadTabView';
+import { DownloadTabView, DownloadFormat, ExportFolderTarget, LastExportNotice } from './components/DownloadTabView';
+import {
+  resolveExportCategory,
+  cleanHeuristicShortTitle,
+  buildTaggedExportFileName,
+  refineSubtitleName,
+} from './utils/exportCategorizer';
+import { evaluateProjectTagsAndCompletion } from './utils/projectTags';
 import { MenuSettingsTabView, SettingsCategoryId, TranslationSubMenuId } from './components/MenuSettingsTabView';
-import { ThemeSelector, AppTheme } from './components/ThemeSelector';
+import { ThemeSelector, AppTheme, isLightAppTheme, getThemeCanvasColor } from './components/ThemeSelector';
+import { ResponsiveLazyImage } from './components/ResponsiveLazyImage';
 import { InfoPopover } from './components/InfoPopover';
 import { ConfirmDialogModal } from './components/ConfirmDialogModal';
 import { detectLineDirection } from './components/FormattedRichText';
@@ -175,12 +197,11 @@ import {
   generateJSONCaptions,
   GRADIENT_PALETTES 
 } from './utils/subtitleFormatter';
-import { useProgressiveRenderList } from './utils/performance';
 import { quotaManager, FeasibilityReport } from './services/quota';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
-import { dbService, ProjectDraft, CrashSnapshot, DetailedStorageBreakdown } from './services/db';
+import { dbService, ProjectDraft, ProjectDraftVersion, ProjectListPlacement, StoredSubtitleFile, CrashSnapshot, DetailedStorageBreakdown } from './services/db';
 import {
   AppPreferences,
   DEFAULT_APP_PREFERENCES,
@@ -625,7 +646,7 @@ const SubtitleRow = memo(({
     <tr
       onDoubleClick={() => onOpenEditor(item.index)}
       className={cn(
-        'group transition-colors border-b cursor-default',
+        'group transition-colors border-b cursor-default perf-tr-row',
         item.index === 1 && 'border-l-2 border-l-amber-500'
       )}
       style={{
@@ -980,7 +1001,8 @@ const ResizableBox = ({
   icon: Icon,
   actions,
   isFullScreen = false,
-  onFullScreenToggle
+  onFullScreenToggle,
+  hideHeader = false
 }: { 
   children: React.ReactNode; 
   initialHeight?: number; 
@@ -991,6 +1013,7 @@ const ResizableBox = ({
   actions?: React.ReactNode;
   isFullScreen?: boolean;
   onFullScreenToggle?: () => void;
+  hideHeader?: boolean;
 }) => {
   const [height, setHeight] = useState(initialHeight);
   const [isDragging, setIsDragging] = useState(false);
@@ -1117,56 +1140,73 @@ const ResizableBox = ({
         borderColor: 'var(--theme-border)',
       }}
     >
-      {/* Slim Container Header — touching anywhere on header title row expands/collapses */}
-      <div
-        className="px-2.5 py-2 border-b relative z-30 shrink-0 rounded-t-xl"
-        style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
-      >
-        <div className="flex flex-col gap-2 w-full">
-          <div
-            onClick={toggleCollapse}
-            className={cn(
-              'flex items-center justify-between gap-2 shrink-0 w-full select-none',
-              !isProjectControls && 'cursor-pointer hover:opacity-85 transition-opacity'
-            )}
-            title={!isProjectControls ? (isCollapsed ? 'Expand' : 'Collapse') : undefined}
-          >
-            <div className="flex items-center gap-1.5 min-w-0">
-              <Icon size={14} className="shrink-0" style={{ color: 'var(--theme-accent)' }} />
-              <span className="text-[11px] font-semibold uppercase tracking-wider whitespace-nowrap truncate">
-                {title}
-              </span>
-              {!isProjectControls && (
-                <ChevronDown
-                  size={13}
-                  className={cn('opacity-55 transition-transform duration-150 shrink-0', isCollapsed && '-rotate-90')}
-                />
+      {/* Slim Container Header — hidden when moved to footer (e.g. Workspace) */}
+      {!hideHeader && (
+        <div
+          className="px-2.5 py-2 border-b relative z-30 shrink-0 rounded-t-xl"
+          style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+        >
+          <div className="flex flex-col gap-2 w-full">
+            <div
+              onClick={toggleCollapse}
+              className={cn(
+                'flex items-center justify-between gap-2 shrink-0 w-full select-none',
+                !isProjectControls && 'cursor-pointer hover:opacity-85 transition-opacity'
+              )}
+              title={!isProjectControls ? (isCollapsed ? 'Expand' : 'Collapse') : undefined}
+            >
+              <div className="flex items-center gap-1.5 min-w-0">
+                <Icon size={14} className="shrink-0" style={{ color: 'var(--theme-accent)' }} />
+                <span className="text-[11px] font-semibold uppercase tracking-wider whitespace-nowrap truncate">
+                  {title}
+                </span>
+                {!isProjectControls && (
+                  <ChevronDown
+                    size={13}
+                    className={cn('opacity-55 transition-transform duration-150 shrink-0', isCollapsed && '-rotate-90')}
+                  />
+                )}
+              </div>
+              {onFullScreenToggle && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onFullScreenToggle();
+                  }}
+                  className="p-1.5 rounded-md border hover:opacity-85 transition-opacity cursor-pointer shrink-0"
+                  style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+                  title={isFullScreen ? 'Exit Full Screen' : 'Full Screen'}
+                >
+                  {isFullScreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+                </button>
               )}
             </div>
-            {onFullScreenToggle && (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onFullScreenToggle();
-                }}
-                className="p-1.5 rounded-md border hover:opacity-85 transition-opacity cursor-pointer shrink-0"
-                style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
-                title={isFullScreen ? 'Exit Full Screen' : 'Full Screen'}
+
+            {actions && (
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="flex items-center gap-1.5 relative z-40 shrink-0"
               >
-                {isFullScreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
-              </button>
+                {actions}
+              </div>
             )}
           </div>
-
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="flex items-center gap-1.5 relative z-40 shrink-0"
-          >
-            {actions}
-          </div>
         </div>
-      </div>
+      )}
+
+      {hideHeader && isFullScreen && onFullScreenToggle && (
+        <button
+          type="button"
+          onClick={onFullScreenToggle}
+          className="fixed top-2.5 right-3 z-[120] px-2.5 py-1.5 rounded-lg border shadow-md text-[10px] font-semibold flex items-center gap-1 cursor-pointer touch-tactile"
+          style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)', color: 'var(--theme-text)' }}
+          title="Exit Full Screen"
+        >
+          <Minimize2 size={12} />
+          <span>Exit Full</span>
+        </button>
+      )}
 
       {!isCollapsed && (
         <div
@@ -1228,11 +1268,33 @@ export default function App() {
   const [isLoaded, setIsLoaded] = useState(false);
   const [isGeminiConnected, setIsGeminiConnected] = useState(false);
   const [geminiConnectStatus, setGeminiConnectStatus] = useState<'idle' | 'loading' | 'success' | 'failed'>('idle');
+  const [aiConnectionNote, setAiConnectionNote] = useState<string>('');
   const [googleConnectStatus, setGoogleConnectStatus] = useState<'idle' | 'loading' | 'success' | 'failed'>('idle');
   const [analyzeStatus, setAnalyzeStatus] = useState<'idle' | 'loading' | 'success' | 'failed'>('idle');
-  const [selectedModel, setSelectedModel] = useState<string>('gemini-4-hydrogen');
+  const [customAiModels, setCustomAiModels] = useState<CustomAiModelConfig[]>(() => getStoredCustomModels());
+  const [selectedModel, setSelectedModel] = useState<string>(() => {
+    try {
+      return localStorage.getItem('urdu_localizer_selected_model_v1') || 'gemini-4-hydrogen';
+    } catch {
+      return 'gemini-4-hydrogen';
+    }
+  });
   const [geminiApiKey, setGeminiApiKey] = useState<string>(() => getStoredGeminiApiKey());
   const [googleApiKey, setGoogleApiKey] = useState<string>('');
+  const [activeModelApiKey, setActiveModelApiKey] = useState<string>(() =>
+    getApiKeyForModel(
+      (() => {
+        try {
+          return localStorage.getItem('urdu_localizer_selected_model_v1') || 'gemini-4-hydrogen';
+        } catch {
+          return 'gemini-4-hydrogen';
+        }
+      })(),
+      getStoredCustomModels(),
+      '',
+      getStoredGeminiApiKey()
+    )
+  );
   
   // Performance Settings - balanced concurrency to prevent 429 rate limits & browser hangs
   const [geminiBatchSize, setGeminiBatchSize] = useState<number>(10);
@@ -1287,6 +1349,10 @@ export default function App() {
   const [activeStylingConfig, setActiveStylingConfig] = useState<ActiveStylingConfig>(DEFAULT_STYLING_CONFIG);
   const [isWorkspaceStylingPreview, setIsWorkspaceStylingPreview] = useState<boolean>(false);
   const [hasAppliedCustomStyle, setHasAppliedCustomStyle] = useState<boolean>(false);
+  const [editedInApp, setEditedInApp] = useState<boolean>(false);
+  const editedInAppRef = useRef(editedInApp);
+  editedInAppRef.current = editedInApp;
+  const [syncedBaseTitle, setSyncedBaseTitle] = useState<string>('');
 
   // Stable references for high-speed memoized rendering
   const subtitlesRef = useRef(subtitles);
@@ -1310,18 +1376,38 @@ export default function App() {
   const [isHomeDrawerOpen, setIsHomeDrawerOpen] = useState(false);
   const [isTranslatorDrawerOpen, setIsTranslatorDrawerOpen] = useState(false);
   const [isWorkspaceDrawerOpen, setIsWorkspaceDrawerOpen] = useState(false);
+  const [isWorkspaceFooterExpanded, setIsWorkspaceFooterExpanded] = useState(false);
+  const [bulkLoadingOverlay, setBulkLoadingOverlay] = useState<{ title: string; detail?: string } | null>(null);
   const [isOnScreenSlidersOpen, setIsOnScreenSlidersOpen] = useState(false);
   const [focusedSettingsCategory, setFocusedSettingsCategory] = useState<SettingsCategoryId | null>(null);
   const [focusedTranslationSub, setFocusedTranslationSub] = useState<TranslationSubMenuId | null>(null);
   const [hasPendingStyleBake, setHasPendingStyleBake] = useState(false);
 
+  const runBulkWithLoader = useCallback(async <T,>(
+    title: string,
+    detail: string | undefined,
+    fn: () => Promise<T> | T
+  ): Promise<T> => {
+    setBulkLoadingOverlay({ title, detail });
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 18)));
+    });
+    try {
+      return await fn();
+    } finally {
+      setBulkLoadingOverlay(null);
+    }
+  }, []);
+
   useEffect(() => {
     setIsHomeDrawerOpen(false);
     setIsTranslatorDrawerOpen(false);
     setIsWorkspaceDrawerOpen(false);
+    setIsWorkspaceFooterExpanded(false);
   }, [activeTab]);
   const [glossary, setGlossary] = useState<GlossaryEntry[]>(() => loadGlossary());
   const [drafts, setDrafts] = useState<ProjectDraft[]>([]);
+  const [mySubtitlesFiles, setMySubtitlesFiles] = useState<StoredSubtitleFile[]>([]);
   const [activeDraftId, setActiveDraftId] = useState<string | null>(null);
   const draftsRef = useRef(drafts);
   draftsRef.current = drafts;
@@ -1475,9 +1561,9 @@ export default function App() {
     reason?: string;
   }>({ workers: 2, delay: 1200, throttled: false });
 
-  // Pagination for high-speed rendering (prevents DOM layout recalculation lag)
+  // Render all subtitles immediately (0 = All) for instant workspace load & zero scroll delay
   const [currentPage, setCurrentPage] = useState<number>(1);
-  const [pageSize, setPageSize] = useState<number>(() => loadAppPreferences().defaultPageSize); // 25, 50, 100, 0 for all
+  const [pageSize, setPageSize] = useState<number>(0); // 0 = All, 25, 50, 100
   const [searchInput, setSearchInput] = useState<string>('');
   const [searchTerm, setSearchTerm] = useState<string>('');
 
@@ -1728,15 +1814,25 @@ export default function App() {
 
   const refreshDraftsAndStats = useCallback(async () => {
     try {
-      const [loadedDrafts, breakdownData] = await Promise.all([
+      const [loadedDrafts, breakdownData, loadedMyFiles] = await Promise.all([
         dbService.listDrafts(),
         dbService.getDetailedStorageBreakdown(),
+        dbService.listMySubtitlesFiles().catch(() => []),
       ]);
       setDrafts(loadedDrafts);
       setStorageBreakdown(breakdownData);
+      setMySubtitlesFiles(loadedMyFiles);
     } catch (e) {
       console.error('Failed to refresh drafts/stats', e);
     }
+  }, []);
+
+  useEffect(() => {
+    const onMySubsChanged = () => {
+      dbService.listMySubtitlesFiles().then(setMySubtitlesFiles).catch(() => {});
+    };
+    window.addEventListener('urduLocalizerMySubtitlesChanged', onMySubsChanged);
+    return () => window.removeEventListener('urduLocalizerMySubtitlesChanged', onMySubsChanged);
   }, []);
 
   const buildDraftPayload = useCallback(
@@ -1744,76 +1840,158 @@ export default function App() {
       subs: SubtitleItem[],
       opts: {
         id?: string;
+        existingDraft?: ProjectDraft;
         title: string;
+        isRenamedTitle?: boolean;
         fileName: string;
         detectedFormat: string;
         context: string;
         customPrompt: string;
         translationSettings: TranslationSettings;
         activeStylingConfig: ActiveStylingConfig;
+        editedInApp?: boolean;
+        hasAppliedCustomStyle?: boolean;
+        categoryPlacement?: ProjectListPlacement;
       }
     ): ProjectDraft => {
-      const totalCount = subs.length;
-      const aiCount = subs.filter((s) => Boolean(s.translatedText?.trim())).length;
-      const gCount = subs.filter((s) => Boolean(s.googleTranslateText?.trim())).length;
-      const isCompleted = totalCount > 0 && (aiCount === totalCount || gCount === totalCount);
-
-      const tags: string[] = [];
-      if (isCompleted) tags.push('Completed');
-      if (aiCount > 0) tags.push('AI');
-      if (gCount > 0) tags.push('Neutral / Google');
-      const hasBilingual = subs.some(
-        (s) =>
-          s.translatedText &&
-          s.translatedText.includes('\n') &&
-          /[a-zA-Z]/.test(s.translatedText) &&
-          /[\u0600-\u06FF]/.test(s.translatedText)
-      );
-      if (
-        hasBilingual ||
-        opts.translationSettings.scriptMode?.startsWith('bilingual') ||
-        (aiCount > 0 && gCount > 0)
-      ) {
-        tags.push('Bilingual');
-      }
-      if (subs.some((s) => /[\u0600-\u06FF]/.test(s.translatedText || s.googleTranslateText || ''))) {
-        tags.push('Urdu');
-      } else if (
-        subs.some(
-          (s) =>
-            (s.translatedText || s.googleTranslateText) &&
-            /[a-zA-Z]/.test(s.translatedText || s.googleTranslateText || '')
-        )
-      ) {
-        tags.push('Roman');
-      }
-      const fmt = (opts.detectedFormat || 'SRT').split(' ')[0].replace(/[^a-zA-Z0-9.]/g, '');
-      if (fmt && !tags.includes(fmt)) tags.push(fmt);
-
-      return {
-        id: opts.id || `draft-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      const existing = opts.existingDraft;
+      const nowIso = new Date().toISOString();
+      const draftBase: ProjectDraft = {
+        id: existing?.id || opts.id || `draft-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         title: opts.title,
-        fileName: opts.fileName || `${opts.title}.srt`,
-        detectedFormat: opts.detectedFormat || 'SRT',
-        sourceType: opts.detectedFormat.includes('Online')
+        isRenamedTitle: opts.isRenamedTitle ?? existing?.isRenamedTitle,
+        fileName: opts.fileName || existing?.fileName || `${opts.title}.srt`,
+        detectedFormat: opts.detectedFormat || existing?.detectedFormat || 'SRT',
+        sourceType: (opts.detectedFormat || existing?.detectedFormat || '').includes('Online')
           ? 'url'
-          : opts.detectedFormat.includes('Demo')
+          : (opts.detectedFormat || existing?.detectedFormat || '').includes('Demo')
           ? 'demo'
           : 'local',
-        updatedAt: new Date().toISOString(),
-        subtitleCount: totalCount,
-        translatedCount: aiCount,
-        googleCount: gCount,
-        isCompleted,
-        tags,
+        updatedAt: nowIso,
+        subtitleCount: subs.length,
+        translatedCount: subs.filter((s) => Boolean(s.translatedText?.trim()) && s.translatedText?.trim() !== 'Translation Error').length,
+        googleCount: subs.filter((s) => Boolean(s.googleTranslateText?.trim()) && s.googleTranslateText?.trim() !== 'Translation Error').length,
+        editedInApp: opts.editedInApp ?? editedInAppRef.current,
+        hasAppliedCustomStyle: opts.hasAppliedCustomStyle ?? hasAppliedCustomStyle,
+        categoryPlacement: opts.categoryPlacement || existing?.categoryPlacement || 'auto',
         subtitles: subs,
         context: opts.context,
         customPrompt: opts.customPrompt,
         translationSettings: opts.translationSettings,
         activeStylingConfig: opts.activeStylingConfig,
       };
+      const evaluated = evaluateProjectTagsAndCompletion(draftBase);
+
+      const makeVersionRecord = (
+        versionNumber: number,
+        srcSubs: SubtitleItem[],
+        srcCtx: string,
+        srcPrompt: string,
+        srcSettings: TranslationSettings | undefined,
+        srcStyleCfg: ActiveStylingConfig | undefined,
+        srcSavedAt: string,
+        srcAiCount: number,
+        srcGCount: number,
+        srcCompleted: boolean,
+        srcEdited: boolean | undefined,
+        srcStyled: boolean | undefined
+      ): ProjectDraftVersion => ({
+        versionNumber,
+        savedAt: srcSavedAt,
+        summary: `${srcAiCount}/${srcSubs.length} AI${srcGCount > 0 ? ` · ${srcGCount} Neutral` : ''}${srcStyled ? ' · Styled' : ''}`,
+        subtitleCount: srcSubs.length,
+        translatedCount: srcAiCount,
+        googleCount: srcGCount,
+        isCompleted: srcCompleted,
+        editedInApp: srcEdited,
+        hasAppliedCustomStyle: srcStyled,
+        subtitles: srcSubs,
+        context: srcCtx,
+        customPrompt: srcPrompt,
+        translationSettings: srcSettings,
+        activeStylingConfig: srcStyleCfg,
+      });
+
+      let nextVersions: ProjectDraftVersion[];
+      if (existing) {
+        const prevVersions: ProjectDraftVersion[] =
+          Array.isArray(existing.versions) && existing.versions.length > 0
+            ? [...existing.versions].sort((a, b) => b.versionNumber - a.versionNumber)
+            : [
+                makeVersionRecord(
+                  1,
+                  existing.subtitles || [],
+                  existing.context || '',
+                  existing.customPrompt || '',
+                  existing.translationSettings,
+                  existing.activeStylingConfig,
+                  existing.updatedAt || nowIso,
+                  existing.translatedCount || 0,
+                  existing.googleCount || 0,
+                  Boolean(existing.isCompleted),
+                  existing.editedInApp,
+                  existing.hasAppliedCustomStyle
+                ),
+              ];
+        const latest = prevVersions[0];
+        const hasChanges =
+          !latest ||
+          JSON.stringify(latest.subtitles) !== JSON.stringify(subs) ||
+          (latest.context || '') !== (opts.context || '') ||
+          (latest.customPrompt || '') !== (opts.customPrompt || '') ||
+          Boolean(latest.hasAppliedCustomStyle) !== Boolean(draftBase.hasAppliedCustomStyle) ||
+          JSON.stringify(latest.translationSettings || null) !== JSON.stringify(opts.translationSettings || null);
+
+        if (hasChanges) {
+          const maxVersionNum = prevVersions.reduce((mx, v) => Math.max(mx, v.versionNumber || 0), 0);
+          const newVer = makeVersionRecord(
+            maxVersionNum + 1,
+            subs,
+            opts.context,
+            opts.customPrompt,
+            opts.translationSettings,
+            opts.activeStylingConfig,
+            nowIso,
+            evaluated.aiCount,
+            evaluated.gCount,
+            evaluated.isCompleted,
+            draftBase.editedInApp,
+            draftBase.hasAppliedCustomStyle
+          );
+          nextVersions = [newVer, ...prevVersions].slice(0, 25);
+        } else {
+          nextVersions = prevVersions;
+        }
+      } else {
+        nextVersions = [
+          makeVersionRecord(
+            1,
+            subs,
+            opts.context,
+            opts.customPrompt,
+            opts.translationSettings,
+            opts.activeStylingConfig,
+            nowIso,
+            evaluated.aiCount,
+            evaluated.gCount,
+            evaluated.isCompleted,
+            draftBase.editedInApp,
+            draftBase.hasAppliedCustomStyle
+          ),
+        ];
+      }
+
+      return {
+        ...draftBase,
+        title: (opts.isRenamedTitle ?? existing?.isRenamedTitle) ? opts.title : evaluated.displayTitle,
+        translatedCount: evaluated.aiCount,
+        googleCount: evaluated.gCount,
+        isCompleted: evaluated.isCompleted,
+        tags: evaluated.filterTags,
+        versions: nextVersions,
+      };
     },
-    []
+    [hasAppliedCustomStyle]
   );
 
   const autoArchiveCurrentProject = useCallback(
@@ -1838,70 +2016,67 @@ export default function App() {
         return;
       }
 
+      // Match active draft first; if not loaded via draft ID, match existing draft with same fileName (non-demo)
       const existingDraft = curDraftId
         ? draftsRef.current.find((d) => d.id === curDraftId)
+        : curFileName && !curDetectedFormat.includes('Demo')
+        ? draftsRef.current.find((d) => d.fileName === curFileName)
         : undefined;
-
-      const totalCount = currentSubs.length;
-      const aiCount = currentSubs.filter((s) => Boolean(s.translatedText?.trim())).length;
-      const gCount = currentSubs.filter((s) => Boolean(s.googleTranslateText?.trim())).length;
-      const isCompleted = totalCount > 0 && (aiCount === totalCount || gCount === totalCount);
 
       const subsJson = JSON.stringify(currentSubs);
       if (
         existingDraft &&
         existingDraft.context === curContext &&
         existingDraft.customPrompt === curCustomPrompt &&
-        Boolean(existingDraft.isCompleted) === isCompleted &&
+        Boolean(existingDraft.hasAppliedCustomStyle) === Boolean(hasAppliedCustomStyle) &&
         JSON.stringify(existingDraft.subtitles) === subsJson
       ) {
         return;
       }
 
-      if (!existingDraft) {
-        const duplicate = draftsRef.current.find(
-          (d) =>
-            d.fileName === curFileName &&
-            d.subtitleCount === totalCount &&
-            d.context === curContext &&
-            d.customPrompt === curCustomPrompt &&
-            Boolean(d.isCompleted) === isCompleted &&
-            JSON.stringify(d.subtitles) === subsJson
-        );
-        if (duplicate) return;
-      }
-
-      const title = existingDraft?.title || curFileName || `Project ${new Date().toLocaleTimeString()}`;
+      const title =
+        existingDraft?.title ||
+        syncedBaseTitle ||
+        refineSubtitleName(curFileName || `Project ${new Date().toLocaleTimeString()}`, curContext).refinedTitle;
 
       const draft = buildDraftPayload(currentSubs, {
         id: existingDraft?.id,
+        existingDraft,
         title,
+        isRenamedTitle: existingDraft?.isRenamedTitle ?? Boolean(syncedBaseTitle),
         fileName: curFileName || `${title}.srt`,
         detectedFormat: curDetectedFormat || 'SRT',
         context: curContext,
         customPrompt: curCustomPrompt,
         translationSettings: translationSettingsRef.current,
         activeStylingConfig: activeStylingConfigRef.current,
+        editedInApp: existingDraft?.editedInApp || editedInAppRef.current,
+        hasAppliedCustomStyle: existingDraft?.hasAppliedCustomStyle || hasAppliedCustomStyle,
+        categoryPlacement: existingDraft?.categoryPlacement || 'auto',
       });
 
       try {
         await dbService.saveDraft(draft);
         await refreshDraftsAndStats();
-        if (isCompleted) {
+        const latestVer = draft.versions?.[0]?.versionNumber || 1;
+        if (draft.isCompleted && draft.translatedCount > 0) {
           addLog(
-            `Auto-saved completed translation "${title}" to Translated Subtitles (${reason}).`,
+            `Auto-saved "${draft.title}" (v${latestVer}) to Translated Subtitles (${reason}).`,
             'success'
           );
-          addNotification(`Saved completed translation to Translated Subtitles: ${title}`, 'saved');
+          addNotification(`Saved ${draft.title} (v${latestVer})`, 'saved');
+        } else if (!draft.translatedCount && !(draft.googleCount || 0) && draft.editedInApp) {
+          addLog(`Auto-saved edited "${draft.title}" (v${latestVer}) to My Subtitles (${reason}).`, 'info');
+          addNotification(`Saved edited subtitles: ${draft.title} (v${latestVer})`, 'saved');
         } else {
-          addLog(`Auto-saved progress "${title}" to Drafts (${reason}).`, 'info');
-          addNotification(`Auto-saved progress to Drafts: ${title}`, 'saved');
+          addLog(`Auto-saved "${draft.title}" (v${latestVer}) (${reason}).`, 'info');
+          addNotification(`Saved ${draft.title} (v${latestVer})`, 'saved');
         }
       } catch {
         addLog(`Failed to auto-save "${title}" before ${reason}.`, 'warning');
       }
     },
-    [buildDraftPayload, refreshDraftsAndStats, addLog, addNotification]
+    [buildDraftPayload, refreshDraftsAndStats, addLog, addNotification, syncedBaseTitle, hasAppliedCustomStyle]
   );
 
   const loadSampleSubtitles = useCallback(async () => {
@@ -1915,10 +2090,14 @@ export default function App() {
     setBlockHistoryVersion(v => v + 1);
     resetStreamHistory(DEMO_SAMPLE_SUBTITLES);
     setOriginalTimingMap(createOriginalTimingMap(DEMO_SAMPLE_SUBTITLES));
+    activeDraftIdRef.current = null;
     setActiveDraftId(null);
     setHasAppliedCustomStyle(false);
+    setEditedInApp(false);
+    editedInAppRef.current = false;
     setIsWorkspaceStylingPreview(false);
     setFileName('cinematic_demo_subtitles.srt');
+    setSyncedBaseTitle(refineSubtitleName('cinematic_demo_subtitles.srt').refinedTitle);
     setDetectedFormat('Demo Subtitles (.srt)');
     setQcFilter('all');
     setVisibleColumns(prev => ({ ...prev, original: true, ai: true, google: true }));
@@ -1934,7 +2113,7 @@ export default function App() {
     const loadData = async () => {
       try {
         const hasPrefsStored = Boolean(localStorage.getItem('urdu_dubber_app_prefs_v1'));
-        const [saved, loadedDrafts, loadedCrash, breakdownData] = await Promise.all([
+        const [saved, loadedDrafts, loadedCrash, breakdownData, loadedMyFiles] = await Promise.all([
           dbService.loadState(),
           dbService.listDrafts().catch(() => []),
           dbService.loadCrashSnapshot().catch(() => null),
@@ -1951,9 +2130,11 @@ export default function App() {
             quotaTotalBytes: null,
             quotaUsageBytes: null,
           })),
+          dbService.listMySubtitlesFiles().catch(() => []),
         ]);
         setDrafts(loadedDrafts);
         setStorageBreakdown(breakdownData);
+        setMySubtitlesFiles(loadedMyFiles);
 
         const normalizeModel = (m?: string) => {
           if (!m || m === 'gemini-3.8-flash' || m === 'gemini-flash-latest' || m === 'gemini-pro' || m.startsWith('gemini-1.5') || m.startsWith('gemini-2.0')) {
@@ -2031,6 +2212,13 @@ export default function App() {
             saved.subtitles?.some((s: SubtitleItem) => hasFormatting(s.translatedText || s.text || ''))
           );
           setHasAppliedCustomStyle(savedCustomFlag);
+          const savedEditedFlag = Boolean((saved as any).editedInApp);
+          setEditedInApp(savedEditedFlag);
+          editedInAppRef.current = savedEditedFlag;
+          const restoredSyncedTitle =
+            ((saved as any).syncedBaseTitle as string | undefined)?.trim() ||
+            (saved.fileName ? refineSubtitleName(saved.fileName, saved.context).refinedTitle : '');
+          setSyncedBaseTitle(restoredSyncedTitle);
           setIsWorkspaceStylingPreview(
             savedCustomFlag || (Boolean((saved as any).isWorkspaceStylingPreview) && hasAnyTaggedSubs)
           );
@@ -2129,6 +2317,8 @@ export default function App() {
         activeStylingConfig,
         isWorkspaceStylingPreview,
         hasAppliedCustomStyle,
+        editedInApp,
+        syncedBaseTitle,
         activeDraftId,
         isReadOnly,
         studioColumnsToDisplay,
@@ -2183,6 +2373,8 @@ export default function App() {
     activeStylingConfig,
     isWorkspaceStylingPreview,
     hasAppliedCustomStyle,
+    editedInApp,
+    syncedBaseTitle,
     activeDraftId,
     isReadOnly,
     studioColumnsToDisplay,
@@ -2241,6 +2433,112 @@ export default function App() {
     };
   }, [preferences.optionalFeatures.autoSaveDrafts]);
 
+  const resolvedSelectedModel = useMemo(
+    () => resolveAiModel(selectedModel, customAiModels),
+    [selectedModel, customAiModels]
+  );
+
+  // Auto-sync the API key field & connection note whenever selectedModel changes
+  const handleSelectModel = useCallback(
+    (newModel: string) => {
+      setSelectedModel(newModel);
+      try {
+        localStorage.setItem('urdu_localizer_selected_model_v1', newModel);
+      } catch {
+        // Ignore storage errors
+      }
+      const nextKey = getApiKeyForModel(newModel, customAiModels, googleApiKey, getStoredGeminiApiKey());
+      setActiveModelApiKey(nextKey);
+      const resolved = resolveAiModel(newModel, customAiModels);
+      if (isGeminiModelId(newModel, customAiModels)) {
+        setGeminiApiKey(nextKey);
+        if (geminiRef.current) {
+          geminiRef.current.updateConfig(newModel, nextKey);
+        }
+        if (nextKey) {
+          setIsGeminiConnected(true);
+          setAiConnectionNote(`Loaded saved Gemini key for ${resolved.name}.`);
+        } else {
+          setAiConnectionNote(`Checking ${resolved.name} proxy status...`);
+          void GeminiService.checkServerStatus('').then((status) => {
+            setIsGeminiConnected(status.connected);
+            setAiConnectionNote(
+              status.connected
+                ? `${resolved.name} ready (server proxy).`
+                : 'Enter a Gemini API key and tap Connect.'
+            );
+          });
+        }
+      } else if (resolved.protocol === 'google-translate') {
+        setIsGeminiConnected(true);
+        setAiConnectionNote(
+          nextKey ? `Loaded Google Cloud Translate key.` : `Using Free Google Translate endpoint.`
+        );
+      } else {
+        const hasKey = Boolean(nextKey);
+        setIsGeminiConnected(hasKey || !resolved.requiresKey);
+        setAiConnectionNote(
+          hasKey
+            ? `Loaded saved ${resolved.providerLabel} key for ${resolved.name}.`
+            : resolved.requiresKey
+            ? `Enter your ${resolved.providerLabel} API key and tap Connect.`
+            : `Custom keyless endpoint ready (${resolved.endpointUrl}).`
+        );
+      }
+      setGeminiConnectStatus('idle');
+      addLog(`Switched AI engine to ${resolved.providerLabel} · ${resolved.name}`, 'info');
+    },
+    [customAiModels, googleApiKey, addLog]
+  );
+
+  const handleChangeActiveModelApiKey = useCallback(
+    (nextKey: string) => {
+      setActiveModelApiKey(nextKey);
+      setApiKeyForModel(selectedModel, nextKey, customAiModels);
+      const resolved = resolveAiModel(selectedModel, customAiModels);
+      if (isGeminiModelId(selectedModel, customAiModels)) {
+        setGeminiApiKey(nextKey);
+        if (nextKey.trim()) {
+          setStoredGeminiApiKey(nextKey);
+        } else {
+          clearStoredGeminiApiKey();
+        }
+        geminiRef.current?.updateConfig(selectedModel, nextKey);
+      } else if (resolved.protocol === 'google-translate') {
+        setGoogleApiKey(nextKey);
+      }
+    },
+    [selectedModel, customAiModels]
+  );
+
+  const handleAddCustomModel = useCallback(
+    (model: CustomAiModelConfig) => {
+      setCustomAiModels((prev) => {
+        const next = [model, ...prev.filter((m) => m.id !== model.id)];
+        saveStoredCustomModels(next);
+        return next;
+      });
+      addLog(`Added custom AI model: ${model.name} (${model.modelId})`, 'success');
+      addNotification(`Saved custom model "${model.name}"`, 'success');
+    },
+    [addLog, addNotification]
+  );
+
+  const handleDeleteCustomModel = useCallback(
+    (id: string) => {
+      setCustomAiModels((prev) => {
+        const next = prev.filter((m) => m.id !== id);
+        saveStoredCustomModels(next);
+        return next;
+      });
+      if (selectedModel === id) {
+        handleSelectModel('gemini-4-hydrogen');
+      }
+      addNotification('Custom model removed', 'success');
+    },
+    [selectedModel, handleSelectModel, addNotification]
+  );
+
   const connectGemini = useCallback(async (overrideModel?: string, overrideKey?: string) => {
     if (geminiConnectStatus === 'loading') return false;
     setGeminiConnectStatus('loading');
@@ -2249,100 +2547,170 @@ export default function App() {
       const effectiveModel = safeOverrideModel || selectedModel;
       if (safeOverrideModel && safeOverrideModel !== selectedModel) {
         setSelectedModel(safeOverrideModel);
+        try {
+          localStorage.setItem('urdu_localizer_selected_model_v1', safeOverrideModel);
+        } catch {
+          // ignore
+        }
       }
-      const effectiveKey = typeof overrideKey === 'string' ? overrideKey.trim() : getStoredGeminiApiKey();
+      const effectiveKey =
+        typeof overrideKey === 'string'
+          ? overrideKey.trim()
+          : getApiKeyForModel(effectiveModel, customAiModels, googleApiKey, getStoredGeminiApiKey());
 
-      const status = await GeminiService.checkServerStatus(effectiveKey);
+      setActiveModelApiKey(effectiveKey);
+      if (overrideKey !== undefined) {
+        setApiKeyForModel(effectiveModel, effectiveKey, customAiModels);
+      }
+
+      const resolved = resolveAiModel(effectiveModel, customAiModels);
+      const status = await testAiModelConnection({
+        modelId: effectiveModel,
+        apiKey: effectiveKey,
+        customModels: customAiModels,
+        googleRoutingMode: preferencesRef.current.googleRoutingMode,
+        translationSettings: translationSettingsRef.current,
+      });
+
       if (!status.connected) {
-        setError(status.error || "Gemini server is unavailable. Check GEMINI_API_KEY in Settings > Secrets.");
+        setError(status.message);
+        setAiConnectionNote(status.message);
         setIsGeminiConnected(false);
         setGeminiConnectStatus('failed');
         setTimeout(() => setGeminiConnectStatus('idle'), 3000);
         return false;
       }
-      geminiRef.current = new GeminiService(effectiveModel, effectiveKey);
+
+      if (isGeminiModelId(effectiveModel, customAiModels)) {
+        geminiRef.current = new GeminiService(effectiveModel, effectiveKey);
+      }
       setIsGeminiConnected(true);
       setGeminiConnectStatus('success');
-      addLog(
-        `Gemini Connected (${status.mode === 'direct' ? 'local key' : 'server'}): ${effectiveModel}`,
-        "success"
-      );
+      setAiConnectionNote(status.message);
+      addLog(`${resolved.providerLabel} Connected (${status.mode}): ${resolved.name}`, 'success');
       setError(null);
       setTimeout(() => setGeminiConnectStatus('idle'), 3000);
       return true;
     } catch (e: any) {
-      const errMsg = `Failed to connect to Gemini server: ${e?.message || 'Unknown error'}`;
+      const errMsg = `Failed to connect AI model: ${e?.message || 'Unknown error'}`;
       setError(errMsg);
+      setAiConnectionNote(errMsg);
       setIsGeminiConnected(false);
       setGeminiConnectStatus('failed');
       setTimeout(() => setGeminiConnectStatus('idle'), 3000);
       return false;
     }
-  }, [geminiConnectStatus, selectedModel, addLog]);
+  }, [geminiConnectStatus, selectedModel, customAiModels, googleApiKey, addLog]);
 
-  const handleApplyGeminiApiKey = useCallback(async (rawKey?: string) => {
-    const trimmed = (rawKey !== undefined ? rawKey : geminiApiKey).trim();
-    setGeminiApiKey(trimmed);
-    if (trimmed) {
-      setStoredGeminiApiKey(trimmed);
-    } else {
-      clearStoredGeminiApiKey();
+  const handleApplyGeminiApiKey = useCallback(async (overrideModelOrKey?: string, maybeKey?: string) => {
+    const hasTwoArgs = maybeKey !== undefined;
+    const targetModel = hasTwoArgs && overrideModelOrKey ? overrideModelOrKey : selectedModel;
+    const rawKey = hasTwoArgs ? maybeKey : overrideModelOrKey;
+    const trimmed = (rawKey !== undefined ? rawKey : activeModelApiKey).trim();
+
+    setActiveModelApiKey(trimmed);
+    setApiKeyForModel(targetModel, trimmed, customAiModels);
+
+    if (isGeminiModelId(targetModel, customAiModels)) {
+      setGeminiApiKey(trimmed);
+      if (trimmed) {
+        setStoredGeminiApiKey(trimmed);
+      } else {
+        clearStoredGeminiApiKey();
+      }
+      if (geminiRef.current) {
+        geminiRef.current.updateConfig(targetModel, trimmed);
+      }
+    } else if (targetModel === 'google-cloud-translate') {
+      setGoogleApiKey(trimmed);
     }
-    if (geminiRef.current) {
-      geminiRef.current.updateConfig(selectedModel, trimmed);
-    }
-    const ok = await connectGemini(selectedModel, trimmed);
+
+    const ok = await connectGemini(targetModel, trimmed);
+    const resolved = resolveAiModel(targetModel, customAiModels);
     if (ok) {
-      addNotification(trimmed ? 'Gemini API key verified & active!' : 'Switched to Gemini server proxy', 'success');
+      addNotification(
+        trimmed ? `${resolved.providerLabel} key verified & active!` : `${resolved.name} connected!`,
+        'success'
+      );
     } else {
-      addNotification('Gemini connection failed — check key or network', 'error');
+      addNotification(`${resolved.providerLabel} connection failed — check key or endpoint`, 'error');
     }
-  }, [geminiApiKey, selectedModel, connectGemini, addNotification]);
+  }, [activeModelApiKey, selectedModel, customAiModels, connectGemini, addNotification]);
 
   useEffect(() => {
     let cancelled = false;
-    GeminiService.checkServerStatus()
-      .then((status) => {
-        if (cancelled) return;
-        if (status.connected) {
-          if (!geminiRef.current) {
-            geminiRef.current = new GeminiService(selectedModel);
+    const resolved = resolveAiModel(selectedModel, customAiModels);
+    if (!resolved.isCustom && resolved.provider === 'gemini') {
+      GeminiService.checkServerStatus(activeModelApiKey)
+        .then((status) => {
+          if (cancelled) return;
+          if (status.connected) {
+            if (!geminiRef.current) {
+              geminiRef.current = new GeminiService(selectedModel, activeModelApiKey);
+            }
+            setIsGeminiConnected(true);
+            setAiConnectionNote(
+              status.mode === 'direct' ? 'Gemini ready (saved API key).' : 'Gemini ready (server proxy).'
+            );
           }
-          setIsGeminiConnected(true);
-        }
-      })
-      .catch(() => {});
+        })
+        .catch(() => {});
+    } else if (resolved.protocol === 'google-translate' || !resolved.requiresKey || Boolean(activeModelApiKey.trim())) {
+      setIsGeminiConnected(true);
+      setAiConnectionNote(
+        activeModelApiKey.trim()
+          ? `Loaded saved ${resolved.providerLabel} key.`
+          : `${resolved.name} ready.`
+      );
+    }
     return () => {
       cancelled = true;
     };
   }, []);
 
   useEffect(() => {
-    if (geminiRef.current) {
-      geminiRef.current.updateConfig(selectedModel);
+    if (geminiRef.current && isGeminiModelId(selectedModel, customAiModels)) {
+      geminiRef.current.updateConfig(selectedModel, activeModelApiKey);
     }
-  }, [selectedModel]);
+  }, [selectedModel, activeModelApiKey, customAiModels]);
 
   const ensureGeminiConnected = async () => {
-    if (geminiRef.current && isGeminiConnected) {
-      geminiRef.current.updateConfig(selectedModel);
-      return true;
+    const resolved = resolveAiModel(selectedModel, customAiModels);
+    if (!resolved.isCustom && resolved.provider === 'gemini') {
+      if (geminiRef.current && isGeminiConnected) {
+        geminiRef.current.updateConfig(selectedModel, activeModelApiKey);
+        return true;
+      }
+      return await connectGemini();
     }
-    return await connectGemini();
+    if (resolved.requiresKey && !activeModelApiKey.trim()) {
+      const msg = `Enter your ${resolved.providerLabel} API key in the Translation Drawer to use ${resolved.name}.`;
+      setError(msg);
+      addNotification(msg, 'error');
+      setIsTranslatorDrawerOpen(true);
+      return false;
+    }
+    return true;
   };
 
   const updateGeminiConfig = (newModel?: string) => {
     const modelToUse = newModel || selectedModel;
-    if (!geminiRef.current) {
+    if (newModel && newModel !== selectedModel) {
+      handleSelectModel(newModel);
+      return;
+    }
+    if (!geminiRef.current && isGeminiModelId(modelToUse, customAiModels)) {
       void connectGemini(modelToUse);
       return;
     }
     try {
-      geminiRef.current.updateConfig(modelToUse);
-      addLog(`Gemini config updated: ${modelToUse}`, "success");
+      if (geminiRef.current && isGeminiModelId(modelToUse, customAiModels)) {
+        geminiRef.current.updateConfig(modelToUse, activeModelApiKey);
+      }
+      addLog(`AI engine config updated: ${modelToUse}`, 'success');
       setError(null);
-    } catch (e) {
-      setError("Failed to update Gemini configuration.");
+    } catch {
+      setError('Failed to update AI configuration.');
     }
   };
 
@@ -2432,6 +2800,10 @@ export default function App() {
     setSubtitles(nextSubs);
 
     if (!isHistoryNavigating.current) {
+      if (!isTranslating && !isGoogleTranslatingAll) {
+        setEditedInApp(true);
+        editedInAppRef.current = true;
+      }
       const sliced = historyRef.current.slice(0, historyIndexRef.current + 1);
       const nextHistory = [...sliced, nextSubs];
       if (nextHistory.length > 50) nextHistory.shift();
@@ -2441,7 +2813,7 @@ export default function App() {
       setHistoryIndex(nextHistory.length - 1);
       recordStreamChanges(prev, nextSubs);
     }
-  }, [recordStreamChanges]);
+  }, [recordStreamChanges, isTranslating, isGoogleTranslatingAll]);
 
   // Undo / Redo Handlers
   const handleUndo = useCallback(() => {
@@ -2483,15 +2855,17 @@ export default function App() {
       addNotification("No previous timing changes to reset.", "success");
       return;
     }
-    const { updatedSubtitles, resetCount } = resetSubtitleTimings(subtitles, originalTimingMap);
-    if (resetCount === 0) {
-      addNotification("All subtitles are already at original baseline timestamps.", "success");
-      return;
-    }
-    updateSubtitles(updatedSubtitles);
-    addNotification(`Restored ${resetCount} subtitle timestamps back to original baseline!`, "success");
-    addLog(`Reset ${resetCount} subtitle blocks back to original timestamps.`, "success");
-  }, [originalTimingMap, subtitles, updateSubtitles, addNotification, addLog]);
+    void runBulkWithLoader('Resetting Timestamps...', `Restoring original baseline timings across ${subtitles.length} segments`, () => {
+      const { updatedSubtitles, resetCount } = resetSubtitleTimings(subtitles, originalTimingMap);
+      if (resetCount === 0) {
+        addNotification("All subtitles are already at original baseline timestamps.", "success");
+        return;
+      }
+      updateSubtitles(updatedSubtitles);
+      addNotification(`Restored ${resetCount} subtitle timestamps back to original baseline!`, "success");
+      addLog(`Reset ${resetCount} subtitle blocks back to original timestamps.`, "success");
+    });
+  }, [originalTimingMap, subtitles, updateSubtitles, addNotification, addLog, runBulkWithLoader]);
 
   // Subtitle Quality Control (QC) Inspector Map
   const qcAnalysis = useMemo(() => {
@@ -2567,9 +2941,6 @@ export default function App() {
     return filteredSubtitles.slice(start, start + pageSize);
   }, [filteredSubtitles, currentPage, pageSize]);
 
-  // Progressive Viewport Rendering for Translation Workspace
-  const progressiveWorkspaceSubtitles = useProgressiveRenderList(paginatedSubtitles, 15, 25);
-
   // Ensure current page is valid when list changes
   useEffect(() => {
     if (currentPage > totalPages) {
@@ -2621,13 +2992,17 @@ export default function App() {
       const effectiveCustomPrompt = preferences.optionalFeatures.enableTermGlossary
         ? `${customPrompt}${buildGlossaryInstruction(glossary)}`
         : customPrompt;
-      const results = await geminiRef.current!.translateBatch(
-        targetItems.map(item => ({ index: item.index, text: stripFormatting(item.text) })),
+      const results = await translateBatchUnified({
+        modelId: selectedModel,
+        apiKey: activeModelApiKey,
+        customModels: customAiModels,
+        geminiService: geminiRef.current,
+        items: targetItems.map(item => ({ index: item.index, text: stripFormatting(item.text) })),
         context,
-        effectiveCustomPrompt,
-        undefined,
-        translationSettings
-      );
+        customPrompt: effectiveCustomPrompt,
+        settings: translationSettings,
+        googleRoutingMode: preferencesRef.current.googleRoutingMode,
+      });
       
       if (results && results.length > 0) {
         const resultMap = new Map(results.map(r => [r.index, r.translatedText]));
@@ -2688,10 +3063,13 @@ export default function App() {
       addNotification("Editing is locked in Read-Only mode", "error");
       return;
     }
-    updateSubtitles(prev => prev.map(s => selectedIndices.has(s.index) ? { ...s, translatedText: '' } : s));
-    addNotification(`Cleared AI translation on ${selectedIndices.size} subtitle(s) (timestamps & block numbers preserved)`, "success");
-    addLog(`Cleared AI translation stream on ${selectedIndices.size} segment(s). Timestamps preserved.`, "info");
-  }, [selectedIndices, isReadOnly, updateSubtitles, addNotification, addLog]);
+    const count = selectedIndices.size;
+    void runBulkWithLoader('Clearing AI Stream...', `Updating ${count} selected subtitle(s)`, () => {
+      updateSubtitles(prev => prev.map(s => selectedIndices.has(s.index) ? { ...s, translatedText: '' } : s));
+      addNotification(`Cleared AI translation on ${count} subtitle(s) (timestamps & block numbers preserved)`, "success");
+      addLog(`Cleared AI translation stream on ${count} segment(s). Timestamps preserved.`, "info");
+    });
+  }, [selectedIndices, isReadOnly, updateSubtitles, addNotification, addLog, runBulkWithLoader]);
 
   const clearSelectedGoogleTranslations = useCallback(() => {
     if (selectedIndices.size === 0) return;
@@ -2699,10 +3077,13 @@ export default function App() {
       addNotification("Editing is locked in Read-Only mode", "error");
       return;
     }
-    updateSubtitles(prev => prev.map(s => selectedIndices.has(s.index) ? { ...s, googleTranslateText: '' } : s));
-    addNotification(`Cleared Google translation on ${selectedIndices.size} subtitle(s) (timestamps & block numbers preserved)`, "success");
-    addLog(`Cleared Google translation stream on ${selectedIndices.size} segment(s). Timestamps preserved.`, "info");
-  }, [selectedIndices, isReadOnly, updateSubtitles, addNotification, addLog]);
+    const count = selectedIndices.size;
+    void runBulkWithLoader('Clearing Neutral Stream...', `Updating ${count} selected subtitle(s)`, () => {
+      updateSubtitles(prev => prev.map(s => selectedIndices.has(s.index) ? { ...s, googleTranslateText: '' } : s));
+      addNotification(`Cleared Google translation on ${count} subtitle(s) (timestamps & block numbers preserved)`, "success");
+      addLog(`Cleared Google translation stream on ${count} segment(s). Timestamps preserved.`, "info");
+    });
+  }, [selectedIndices, isReadOnly, updateSubtitles, addNotification, addLog, runBulkWithLoader]);
 
   const clearSelectedBothTranslations = useCallback(() => {
     if (selectedIndices.size === 0) return;
@@ -2710,10 +3091,13 @@ export default function App() {
       addNotification("Editing is locked in Read-Only mode", "error");
       return;
     }
-    updateSubtitles(prev => prev.map(s => selectedIndices.has(s.index) ? { ...s, translatedText: '', googleTranslateText: '' } : s));
-    addNotification(`Cleared translation streams on ${selectedIndices.size} subtitle(s) (timestamps & block numbers preserved)`, "success");
-    addLog(`Cleared both translation streams on ${selectedIndices.size} segment(s). Timestamps preserved.`, "info");
-  }, [selectedIndices, isReadOnly, updateSubtitles, addNotification, addLog]);
+    const count = selectedIndices.size;
+    void runBulkWithLoader('Clearing Translations...', `Updating ${count} selected subtitle(s)`, () => {
+      updateSubtitles(prev => prev.map(s => selectedIndices.has(s.index) ? { ...s, translatedText: '', googleTranslateText: '' } : s));
+      addNotification(`Cleared translation streams on ${count} subtitle(s) (timestamps & block numbers preserved)`, "success");
+      addLog(`Cleared both translation streams on ${count} segment(s). Timestamps preserved.`, "info");
+    });
+  }, [selectedIndices, isReadOnly, updateSubtitles, addNotification, addLog, runBulkWithLoader]);
 
   const clearSelectedOriginalStream = useCallback(() => {
     if (selectedIndices.size === 0) return;
@@ -2721,45 +3105,54 @@ export default function App() {
       addNotification("Editing is locked in Read-Only mode", "error");
       return;
     }
-    updateSubtitles(prev => prev.map(s => selectedIndices.has(s.index) ? { ...s, text: '' } : s));
-    addNotification(`Cleared original text stream on ${selectedIndices.size} subtitle(s) (timestamps & block numbers preserved)`, "success");
-    addLog(`Cleared original dialogue stream on ${selectedIndices.size} segment(s). Timestamps preserved.`, "info");
-  }, [selectedIndices, isReadOnly, updateSubtitles, addNotification, addLog]);
+    const count = selectedIndices.size;
+    void runBulkWithLoader('Clearing Original Stream...', `Updating ${count} selected subtitle(s)`, () => {
+      updateSubtitles(prev => prev.map(s => selectedIndices.has(s.index) ? { ...s, text: '' } : s));
+      addNotification(`Cleared original text stream on ${count} subtitle(s) (timestamps & block numbers preserved)`, "success");
+      addLog(`Cleared original dialogue stream on ${count} segment(s). Timestamps preserved.`, "info");
+    });
+  }, [selectedIndices, isReadOnly, updateSubtitles, addNotification, addLog, runBulkWithLoader]);
 
   const processSubtitleContent = async (fileTitle: string, content: string) => {
-    addLog(`File selected: ${fileTitle}`, "info");
-    void ensureGeminiConnected();
+    await runBulkWithLoader('Loading Subtitles...', `Parsing and preparing "${fileTitle}"`, async () => {
+      addLog(`File selected: ${fileTitle}`, "info");
+      void ensureGeminiConnected();
 
-    const { items, detectedFormat: detectedFmt } = parseUniversalCaptions(content, fileTitle);
-    if (items.length === 0) {
-      addLog(`Could not parse subtitles from ${fileTitle}. File might be empty or invalid.`, "error");
-      addNotification(`Failed to parse ${fileTitle}`, "error");
-      return;
-    }
+      const { items, detectedFormat: detectedFmt } = parseUniversalCaptions(content, fileTitle);
+      if (items.length === 0) {
+        addLog(`Could not parse subtitles from ${fileTitle}. File might be empty or invalid.`, "error");
+        addNotification(`Failed to parse ${fileTitle}`, "error");
+        return;
+      }
 
-    await autoArchiveCurrentProject('load-new');
+      await autoArchiveCurrentProject('load-new');
 
-    setFileName(fileTitle);
-    setSubtitles(items);
-    historyRef.current = [items];
-    historyIndexRef.current = 0;
-    setHistory([items]);
-    setHistoryIndex(0);
-    blockHistoryRef.current.clear();
-    setBlockHistoryVersion(v => v + 1);
-    resetStreamHistory(items);
-    setOriginalTimingMap(createOriginalTimingMap(items));
-    setActiveDraftId(null);
-    setHasAppliedCustomStyle(false);
-    setIsWorkspaceStylingPreview(false);
-    setSelectedIndices(new Set());
-    setDetectedFormat(detectedFmt);
-    setQcFilter('all');
-    dbService.clearCrashSnapshot().catch(() => {});
-    setCrashSnapshot(null);
-    setActiveTab('workspace');
-    addLog(`Successfully loaded ${items.length} entries from ${detectedFmt}.`, "success");
-    addNotification(`Loaded ${items.length} segments (${detectedFmt})`, "success");
+      setFileName(fileTitle);
+      setSyncedBaseTitle(refineSubtitleName(fileTitle).refinedTitle);
+      setSubtitles(items);
+      historyRef.current = [items];
+      historyIndexRef.current = 0;
+      setHistory([items]);
+      setHistoryIndex(0);
+      blockHistoryRef.current.clear();
+      setBlockHistoryVersion(v => v + 1);
+      resetStreamHistory(items);
+      setOriginalTimingMap(createOriginalTimingMap(items));
+      activeDraftIdRef.current = null;
+      setActiveDraftId(null);
+      setHasAppliedCustomStyle(false);
+      setEditedInApp(false);
+      editedInAppRef.current = false;
+      setIsWorkspaceStylingPreview(false);
+      setSelectedIndices(new Set());
+      setDetectedFormat(detectedFmt);
+      setQcFilter('all');
+      dbService.clearCrashSnapshot().catch(() => {});
+      setCrashSnapshot(null);
+      setActiveTab('workspace');
+      addLog(`Successfully loaded ${items.length} entries from ${detectedFmt}.`, "success");
+      addNotification(`Loaded ${items.length} segments (${detectedFmt})`, "success");
+    });
   };
 
   const processSubtitleContentRef = useRef(processSubtitleContent);
@@ -2808,7 +3201,15 @@ export default function App() {
     setAnalyzeStatus('loading');
     addLog("Analyzing subtitles for cultural context...", "info");
     try {
-      const generatedContext = (await geminiRef.current.generateContext(sample)).trim();
+      const generatedContext = (
+        await generateContextUnified({
+          modelId: selectedModel,
+          apiKey: activeModelApiKey,
+          customModels: customAiModels,
+          geminiService: geminiRef.current,
+          subtitlesSample: sample,
+        })
+      ).trim();
       if (!generatedContext || generatedContext === "No context generated.") {
         throw new Error("No context text generated.");
       }
@@ -2867,7 +3268,7 @@ export default function App() {
     stopGeminiRef.current = false;
     geminiAbortControllerRef.current = new AbortController();
     const abortSignal = geminiAbortControllerRef.current.signal;
-    addLog("Starting Gemini translation...", "info");
+    addLog(`Starting translation with ${resolvedSelectedModel.name}...`, "info");
 
     const itemsToTranslate = subtitles.filter(s => !s.translatedText);
     if (itemsToTranslate.length === 0) {
@@ -2932,13 +3333,18 @@ export default function App() {
 
         try {
           addLog(`Worker ${i} translating batch starting at #${batchKey}...`, "info");
-          const results = await geminiRef.current!.translateBatch(
-            batch.map(b => ({ index: b.index, text: stripFormatting(b.text) })), 
-            activeContext, 
-            effectiveCustomPrompt,
-            abortSignal,
-            translationSettings
-          );
+          const results = await translateBatchUnified({
+            modelId: selectedModel,
+            apiKey: activeModelApiKey,
+            customModels: customAiModels,
+            geminiService: geminiRef.current,
+            items: batch.map(b => ({ index: b.index, text: stripFormatting(b.text) })),
+            context: activeContext,
+            customPrompt: effectiveCustomPrompt,
+            signal: abortSignal,
+            settings: translationSettings,
+            googleRoutingMode: preferencesRef.current.googleRoutingMode,
+          });
           
           if (stopGeminiRef.current || abortSignal.aborted) break;
 
@@ -3267,26 +3673,61 @@ export default function App() {
       addNotification("Editing is locked in Read-Only mode", "error");
       return;
     }
-    let count = 0;
-    updateSubtitles(prev => prev.map(s => {
-      if (!s.translatedText && s.googleTranslateText && s.googleTranslateText !== 'Translation Error') {
-        count++;
-        return { ...s, translatedText: s.googleTranslateText };
+    void runBulkWithLoader('Copying Neutral Translations...', 'Populating empty AI subtitle blocks', () => {
+      let count = 0;
+      updateSubtitles(prev => prev.map(s => {
+        if (!s.translatedText && s.googleTranslateText && s.googleTranslateText !== 'Translation Error') {
+          count++;
+          return { ...s, translatedText: s.googleTranslateText };
+        }
+        return s;
+      }));
+      if (count > 0) {
+        addLog(`Populated ${count} untranslated segments with Google translations.`, "success");
+        addNotification(`Populated ${count} empty AI fields with Google translations`, "success");
+      } else {
+        addLog("All segments already have Urdu translations or no Google translations available.", "warning");
       }
-      return s;
-    }));
-    if (count > 0) {
-      addLog(`Populated ${count} untranslated segments with Google translations.`, "success");
-      addNotification(`Populated ${count} empty AI fields with Google translations`, "success");
-    } else {
-      addLog("All segments already have Urdu translations or no Google translations available.", "warning");
-    }
+    });
   };
+
+  const handleSuggestShortFileName = useCallback(
+    async (rawName: string) => {
+      const sampleLines = subtitlesRef.current
+        .slice(0, 12)
+        .map((s) => s.text || '')
+        .filter(Boolean)
+        .join(' | ');
+      const fallbackTitle = cleanHeuristicShortTitle(rawName || fileName, context);
+
+      try {
+        if (!geminiRef.current && isGeminiModelId(selectedModel, customAiModels)) {
+          geminiRef.current = new GeminiService(selectedModel, activeModelApiKey);
+        }
+        return await suggestShortFileNameUnified({
+          modelId: selectedModel,
+          apiKey: activeModelApiKey,
+          customModels: customAiModels,
+          geminiService: geminiRef.current,
+          rawFileName: rawName || fileName,
+          context,
+          sampleLines,
+        });
+      } catch {
+        return {
+          primary: fallbackTitle,
+          alternatives: [],
+          usedSearch: false,
+        };
+      }
+    },
+    [fileName, context, selectedModel, activeModelApiKey, customAiModels]
+  );
 
   const downloadFormattedSubtitles = async (
     format: 'srt-formatted' | 'ass' | 'ssa' | 'vtt' | 'srt-clean' | 'sbv' | 'lrc' | 'txt' | 'json' | 'copy',
     type: 'ai' | 'google' | 'original' = 'ai',
-    folderTarget?: { directoryHandle?: any; dirName?: string }
+    folderTarget?: ExportFolderTarget
   ) => {
     if (subtitles.length === 0) {
       addLog("Export failed: No subtitles to export.", "error");
@@ -3295,10 +3736,31 @@ export default function App() {
     }
 
     try {
-      const baseName = (fileName || 'subtitles').replace(/\.[^/.]+$/, '').replace(/[^a-z0-9_-]/gi, '_');
+      const category = resolveExportCategory({
+        streamType: type,
+        translationSettings,
+        subtitles,
+      });
+      const autoFolders = preferencesRef.current.autoCategorizeExportFolders ?? true;
+      const subFolder =
+        folderTarget?.subFolder !== undefined
+          ? folderTarget.subFolder
+          : autoFolders
+          ? category.subFolder
+          : '';
+      const includeTag =
+        folderTarget?.includeTag !== undefined
+          ? folderTarget.includeTag
+          : preferencesRef.current.autoTagExportFileNames ?? true;
+
+      const cleanBaseTitle =
+        folderTarget?.customBaseName?.trim() ||
+        syncedBaseTitle.trim() ||
+        cleanHeuristicShortTitle(fileName, context);
+
       let content = '';
       let mimeType = 'text/plain;charset=utf-8';
-      let fileExt = 'srt';
+      let rawExt = 'srt';
 
       // One-tap Clipboard Copy for Android messaging / WhatsApp
       if (format === 'copy') {
@@ -3312,53 +3774,53 @@ export default function App() {
       if (format === 'srt-formatted') {
         content = generateFormattedSRT(subtitles, type);
         mimeType = 'text/srt;charset=utf-8';
-        fileExt = `${type}_formatted.srt`;
+        rawExt = 'srt';
       } else if (format === 'ass') {
         content = generateASS(subtitles, {
           fontFamily: urduFont,
           fontSize: translatedFontSize || 38,
-          title: baseName,
+          title: cleanBaseTitle,
           type,
           palette: GRADIENT_PALETTES.find(p => p.id === activeStylingConfig?.paletteId),
           stylingConfig: activeStylingConfig
         });
         mimeType = 'text/x-ssa;charset=utf-8';
-        fileExt = `${type}_android_vlc.ass`;
+        rawExt = 'ass';
       } else if (format === 'ssa') {
         content = generateSSA(subtitles, {
           fontFamily: urduFont,
           fontSize: translatedFontSize || 38,
-          title: baseName,
+          title: cleanBaseTitle,
           type,
           palette: GRADIENT_PALETTES.find(p => p.id === activeStylingConfig?.paletteId),
           stylingConfig: activeStylingConfig
         });
         mimeType = 'text/x-ssa;charset=utf-8';
-        fileExt = `${type}_v4.ssa`;
+        rawExt = 'ssa';
       } else if (format === 'vtt') {
         content = generateWebVTT(subtitles, type);
         mimeType = 'text/vtt;charset=utf-8';
-        fileExt = `${type}_web_android.vtt`;
+        rawExt = 'vtt';
       } else if (format === 'sbv') {
         content = generateYouTubeSBV(subtitles, type);
         mimeType = 'text/plain;charset=utf-8';
-        fileExt = `${type}_youtube.sbv`;
+        rawExt = 'sbv';
       } else if (format === 'lrc') {
         content = generateLRC(subtitles, type);
         mimeType = 'text/plain;charset=utf-8';
-        fileExt = `${type}_mobile_lyrics.lrc`;
+        rawExt = 'lrc';
       } else if (format === 'txt') {
         content = generateAndroidPhoneTranscript(subtitles, type, true);
         mimeType = 'text/plain;charset=utf-8';
-        fileExt = `${type}_android_phone.txt`;
+        rawExt = 'txt';
       } else if (format === 'json') {
         content = generateJSONCaptions(subtitles, type);
         mimeType = 'application/json;charset=utf-8';
-        fileExt = `${type}_timed_text.json`;
+        rawExt = 'json';
       } else {
         content = generateCleanSRT(subtitles, type);
         mimeType = 'text/srt;charset=utf-8';
-        fileExt = `${type}_clean.srt`;
+        rawExt = 'srt';
       }
 
       if (!content || content.trim().length === 0) {
@@ -3366,8 +3828,68 @@ export default function App() {
         return;
       }
 
-      const outFileName = `${baseName}_${fileExt}`;
+      const baseTagSlug = folderTarget?.tagSlug || category.tagSlug;
+      const effectiveTagSlug =
+        format === 'srt-clean' ? baseTagSlug.replace(/\]$/, '-Clean]') : baseTagSlug;
+      const outFileName = buildTaggedExportFileName({
+        baseTitle: cleanBaseTitle,
+        tagSlug: effectiveTagSlug,
+        extension: rawExt,
+        includeTag,
+      });
       const blob = new Blob(['\ufeff' + content], { type: mimeType });
+
+      const registerExportedInMySubtitles = async () => {
+        try {
+          const aiDone =
+            subtitles.length > 0 &&
+            subtitles.every(
+              (s) => Boolean(s.translatedText?.trim()) && s.translatedText?.trim() !== 'Translation Error'
+            );
+          const gDone =
+            subtitles.length > 0 &&
+            subtitles.every(
+              (s) =>
+                Boolean(s.googleTranslateText?.trim()) &&
+                s.googleTranslateText?.trim() !== 'Translation Error'
+            );
+          // Strict completion rule: never mark complete for Google-only or incomplete AI translation
+          const streamCompleted =
+            type === 'ai' ? aiDone : type === 'google' ? aiDone && gDone : aiDone;
+
+          const storedEntry: StoredSubtitleFile = {
+            id: `exported::${outFileName.toLowerCase()}`,
+            name: outFileName,
+            displayName: cleanBaseTitle,
+            folderName: subFolder || 'Exports',
+            relativePath: subFolder ? `${subFolder}/${outFileName}` : outFileName,
+            format: rawExt.toUpperCase(),
+            sizeBytes: blob.size,
+            lastModified: Date.now(),
+            content,
+            addedAt: new Date().toISOString(),
+            sourceKind: 'exported',
+            subFolder: subFolder || 'Exports',
+            isCompleted: streamCompleted,
+            draftId: activeDraftIdRef.current || undefined,
+            tags: Array.from(
+              new Set([
+                'Exported',
+                category.displayLabel,
+                streamCompleted ? 'Completed' : 'Incomplete',
+                ...(hasAppliedCustomStyle ? ['Styled'] : []),
+                rawExt.toUpperCase(),
+              ])
+            ),
+          };
+          await dbService.saveMySubtitlesFiles([storedEntry]);
+          const updatedFiles = await dbService.listMySubtitlesFiles();
+          setMySubtitlesFiles(updatedFiles);
+          window.dispatchEvent(new CustomEvent('urduLocalizerMySubtitlesChanged'));
+        } catch {
+          // Non-fatal IndexedDB registration error
+        }
+      };
 
       // Direct export to user-selected folder when File System Access handle is provided
       if (folderTarget?.directoryHandle) {
@@ -3380,13 +3902,23 @@ export default function App() {
             perm = await dirHandle.requestPermission({ mode: 'readwrite' });
           }
           if (perm === 'granted' && typeof dirHandle.getFileHandle === 'function') {
-            const fileHandle = await dirHandle.getFileHandle(outFileName, { create: true });
+            let targetDir = dirHandle;
+            if (subFolder && typeof dirHandle.getDirectoryHandle === 'function') {
+              targetDir = await dirHandle.getDirectoryHandle(subFolder, { create: true });
+            }
+            const fileHandle = await targetDir.getFileHandle(outFileName, { create: true });
             const writable = await fileHandle.createWritable();
             await writable.write(blob);
             await writable.close();
-            const label = folderTarget.dirName || dirHandle.name || 'selected folder';
-            addLog(`Exported ${outFileName} to folder "${label}".`, "success");
-            addNotification(`Exported ${outFileName} to ${label}`, "success");
+            await registerExportedInMySubtitles();
+            const rootLabel = folderTarget.dirName || dirHandle.name || 'selected folder';
+            const fullLabel = subFolder ? `${rootLabel}/${subFolder}` : rootLabel;
+            setLastExportNotice({
+              fileName: outFileName,
+              locationLabel: fullLabel,
+            });
+            addLog(`Exported ${outFileName} to folder "${fullLabel}".`, "success");
+            addNotification(`Exported ${outFileName} to ${fullLabel}`, "success");
             return;
           }
         } catch (dirErr: any) {
@@ -3394,14 +3926,16 @@ export default function App() {
         }
       }
 
-      // Native Capacitor Android export (Selected SAF Folder / Documents/UrduLocalizer + FileProvider Share Sheet)
+      // Native Capacitor Android export (Selected SAF Folder / Documents/UrduLocalizer + Auto Subfolder)
       if (isNativeAndroid()) {
         const res = await exportSubtitleNativeAndroid({
           fileName: outFileName,
           content,
           saveMode: preferencesRef.current.androidSaveMode || 'documents',
+          subFolder,
         });
         if (res.success) {
+          await registerExportedInMySubtitles();
           const locationLabel = res.savedPath
             ? res.savedPath
             : 'Android Share / Save-As Sheet';
@@ -3440,6 +3974,7 @@ export default function App() {
               text: `Subtitles exported from Urdu Localizer`
             });
             sharedViaSystem = true;
+            await registerExportedInMySubtitles();
             addLog(`Shared ${outFileName} via Android system share sheet.`, "success");
             addNotification(`Shared ${format.toUpperCase()} subtitles`, "success");
           }
@@ -3464,6 +3999,7 @@ export default function App() {
           URL.revokeObjectURL(url);
         }, 30000);
 
+        await registerExportedInMySubtitles();
         addLog(`Exported ${format.toUpperCase()} subtitles: ${outFileName}`, "success");
         addNotification(`Exported ${format.toUpperCase()} format`, "success");
       }
@@ -3581,9 +4117,11 @@ export default function App() {
       blockHistoryRef.current.clear();
       setBlockHistoryVersion(v => v + 1);
       resetStreamHistory([]);
+      activeDraftIdRef.current = null;
       setActiveDraftId(null);
       setContext('');
       setFileName('');
+      setSyncedBaseTitle('');
       setDetectedFormat('');
       setLogs([]);
       setError(null);
@@ -3591,6 +4129,8 @@ export default function App() {
       setSelectedIndices(new Set());
       setActiveStylingConfig(DEFAULT_STYLING_CONFIG);
       setHasAppliedCustomStyle(false);
+      setEditedInApp(false);
+      editedInAppRef.current = false;
       setIsWorkspaceStylingPreview(false);
       setIsReadOnly(preferences.defaultReadOnly);
       setStudioColumnsToDisplay({ original: true, ai: true, google: true, time: true });
@@ -3650,11 +4190,15 @@ export default function App() {
       setBlockHistoryVersion(v => v + 1);
       resetStreamHistory(items);
       setOriginalTimingMap(createOriginalTimingMap(items));
+      activeDraftIdRef.current = null;
       setActiveDraftId(null);
       setHasAppliedCustomStyle(false);
+      setEditedInApp(false);
+      editedInAppRef.current = false;
       setIsWorkspaceStylingPreview(false);
       setSelectedIndices(new Set());
       setFileName(derivedName);
+      setSyncedBaseTitle(refineSubtitleName(derivedName).refinedTitle);
       setDetectedFormat(`${detectedFmt} (Online URL)`);
       setQcFilter('all');
       dbService.clearCrashSnapshot().catch(() => {});
@@ -3676,64 +4220,188 @@ export default function App() {
       addNotification('Load subtitles before saving a draft', 'error');
       return;
     }
-    const cleanTitle = title.trim() || fileName || `Draft ${new Date().toLocaleTimeString()}`;
+    const existingDraft = activeDraftIdRef.current
+      ? draftsRef.current.find((d) => d.id === activeDraftIdRef.current)
+      : fileName && !detectedFormat.includes('Demo')
+      ? draftsRef.current.find((d) => d.fileName === fileName)
+      : undefined;
+
+    const cleanTitle =
+      existingDraft
+        ? (title.trim() && title.trim() !== existingDraft.title ? title.trim() : existingDraft.title)
+        : title.trim() ||
+          syncedBaseTitle.trim() ||
+          refineSubtitleName(fileName || `Draft ${new Date().toLocaleTimeString()}`, context).refinedTitle;
+
     const draft = buildDraftPayload(subtitles, {
+      id: existingDraft?.id || activeDraftIdRef.current || undefined,
+      existingDraft,
       title: cleanTitle,
-      fileName: fileName || `${cleanTitle}.srt`,
-      detectedFormat: detectedFormat || 'SRT',
+      isRenamedTitle: existingDraft ? Boolean(existingDraft.isRenamedTitle || (title.trim() && title.trim() !== existingDraft.title)) : Boolean(title.trim() || syncedBaseTitle.trim()),
+      fileName: fileName || existingDraft?.fileName || `${cleanTitle}.srt`,
+      detectedFormat: detectedFormat || existingDraft?.detectedFormat || 'SRT',
       context,
       customPrompt,
       translationSettings,
       activeStylingConfig,
+      editedInApp: existingDraft?.editedInApp || editedInAppRef.current,
+      hasAppliedCustomStyle: existingDraft?.hasAppliedCustomStyle || hasAppliedCustomStyle,
+      categoryPlacement: existingDraft?.categoryPlacement || 'auto',
     });
     try {
       await dbService.saveDraft(draft);
+      activeDraftIdRef.current = draft.id;
       setActiveDraftId(draft.id);
+      setSyncedBaseTitle(draft.title);
       await refreshDraftsAndStats();
-      addLog(`Saved project draft "${cleanTitle}" (${subtitles.length} lines).`, 'success');
-      addNotification(`Saved draft: ${cleanTitle}`, 'saved');
+      const latestVer = draft.versions?.[0]?.versionNumber || 1;
+      addLog(`Saved "${draft.title}" v${latestVer} (${subtitles.length} lines).`, 'success');
+      addNotification(
+        existingDraft ? `Updated ${draft.title} (v${latestVer})` : `Saved draft: ${draft.title} (v${latestVer})`,
+        'saved'
+      );
     } catch {
       addNotification(`Could not save draft "${cleanTitle}"`, 'not-saved');
     }
-  }, [subtitles, fileName, detectedFormat, context, customPrompt, translationSettings, activeStylingConfig, buildDraftPayload, refreshDraftsAndStats, addLog, addNotification]);
+  }, [subtitles, fileName, syncedBaseTitle, detectedFormat, context, customPrompt, translationSettings, activeStylingConfig, hasAppliedCustomStyle, buildDraftPayload, refreshDraftsAndStats, addLog, addNotification]);
 
   const handleLoadDraft = useCallback(async (draft: ProjectDraft) => {
-    if (draft.id !== activeDraftIdRef.current) {
-      await autoArchiveCurrentProject('switch-draft');
+    await runBulkWithLoader('Opening Project...', `Loading ${draft.subtitleCount || draft.subtitles?.length || 0} subtitle segments`, async () => {
+      if (draft.id !== activeDraftIdRef.current) {
+        await autoArchiveCurrentProject('switch-draft');
+      }
+      blockHistoryRef.current.clear();
+      setBlockHistoryVersion(v => v + 1);
+      setSubtitles(draft.subtitles);
+      historyRef.current = [draft.subtitles];
+      historyIndexRef.current = 0;
+      setHistory([draft.subtitles]);
+      setHistoryIndex(0);
+      resetStreamHistory(draft.subtitles);
+      setOriginalTimingMap(createOriginalTimingMap(draft.subtitles));
+      setSelectedIndices(new Set());
+      activeDraftIdRef.current = draft.id;
+      setActiveDraftId(draft.id);
+      setFileName(draft.fileName);
+      const resolvedTitle = draft.isRenamedTitle
+        ? draft.title
+        : refineSubtitleName(draft.title || draft.fileName, draft.context).refinedTitle;
+      setSyncedBaseTitle(resolvedTitle);
+      setDetectedFormat(draft.detectedFormat || 'Saved Draft');
+      setContext(draft.context || '');
+      setCustomPrompt(draft.customPrompt || '');
+      if (draft.translationSettings) setTranslationSettings(draft.translationSettings);
+      if (draft.activeStylingConfig) setActiveStylingConfig(draft.activeStylingConfig);
+      const draftHasTags = Boolean(draft.hasAppliedCustomStyle || draft.subtitles?.some(s => hasFormatting(s.translatedText || s.text || '')));
+      setHasAppliedCustomStyle(draftHasTags);
+      const draftEdited = Boolean(draft.editedInApp);
+      setEditedInApp(draftEdited);
+      editedInAppRef.current = draftEdited;
+      setIsWorkspaceStylingPreview(draftHasTags);
+      setQcFilter('all');
+      dbService.clearCrashSnapshot().catch(() => {});
+      setCrashSnapshot(null);
+      setActiveTab('workspace');
+      const latestVer = draft.versions?.[0]?.versionNumber || 1;
+      addLog(`Loaded "${resolvedTitle}" (v${latestVer}, ${draft.subtitleCount} lines).`, 'success');
+      addNotification(`Opened: ${resolvedTitle} (v${latestVer})`, 'success');
+    });
+  }, [autoArchiveCurrentProject, addLog, addNotification, resetStreamHistory, runBulkWithLoader]);
+
+  const handleLoadDraftVersion = useCallback(async (draft: ProjectDraft, version: ProjectDraftVersion) => {
+    await runBulkWithLoader(`Loading Version ${version.versionNumber}...`, `Opening ${version.subtitleCount || version.subtitles?.length || 0} subtitle segments`, async () => {
+      if (draft.id !== activeDraftIdRef.current) {
+        await autoArchiveCurrentProject('switch-draft');
+      }
+      blockHistoryRef.current.clear();
+      setBlockHistoryVersion(v => v + 1);
+      setSubtitles(version.subtitles);
+      historyRef.current = [version.subtitles];
+      historyIndexRef.current = 0;
+      setHistory([version.subtitles]);
+      setHistoryIndex(0);
+      resetStreamHistory(version.subtitles);
+      setOriginalTimingMap(createOriginalTimingMap(version.subtitles));
+      setSelectedIndices(new Set());
+      activeDraftIdRef.current = draft.id;
+      setActiveDraftId(draft.id);
+      setFileName(draft.fileName);
+      const resolvedTitle = draft.isRenamedTitle
+        ? draft.title
+        : refineSubtitleName(draft.title || draft.fileName, version.context || draft.context).refinedTitle;
+      setSyncedBaseTitle(resolvedTitle);
+      setDetectedFormat(draft.detectedFormat || 'Saved Draft');
+      setContext(version.context ?? draft.context ?? '');
+      setCustomPrompt(version.customPrompt ?? draft.customPrompt ?? '');
+      if (version.translationSettings || draft.translationSettings) {
+        setTranslationSettings(version.translationSettings || draft.translationSettings);
+      }
+      if (version.activeStylingConfig || draft.activeStylingConfig) {
+        setActiveStylingConfig(version.activeStylingConfig || draft.activeStylingConfig);
+      }
+      const verHasTags = Boolean(
+        version.hasAppliedCustomStyle || version.subtitles?.some(s => hasFormatting(s.translatedText || s.text || ''))
+      );
+      setHasAppliedCustomStyle(verHasTags);
+      const verEdited = Boolean(version.editedInApp ?? draft.editedInApp);
+      setEditedInApp(verEdited);
+      editedInAppRef.current = verEdited;
+      setIsWorkspaceStylingPreview(verHasTags);
+      setQcFilter('all');
+      dbService.clearCrashSnapshot().catch(() => {});
+      setCrashSnapshot(null);
+      setActiveTab('workspace');
+      addLog(`Loaded "${resolvedTitle}" version ${version.versionNumber} (${version.subtitleCount} lines).`, 'success');
+      addNotification(`Opened ${resolvedTitle} (v${version.versionNumber})`, 'success');
+    });
+  }, [autoArchiveCurrentProject, addLog, addNotification, resetStreamHistory, runBulkWithLoader]);
+
+  const handleRestoreDraft = useCallback(async (draft: ProjectDraft) => {
+    await handleLoadDraft(draft);
+    addNotification(`Restored "${draft.title}" to workspace`, 'success');
+  }, [handleLoadDraft, addNotification]);
+
+  const handleRenameDraft = useCallback(async (draft: ProjectDraft, newTitle: string) => {
+    const clean = newTitle.trim();
+    if (!clean) return;
+    const updated: ProjectDraft = {
+      ...draft,
+      title: clean,
+      isRenamedTitle: true,
+      updatedAt: new Date().toISOString(),
+    };
+    await dbService.saveDraft(updated);
+    if (activeDraftIdRef.current === draft.id) {
+      setSyncedBaseTitle(clean);
     }
-    blockHistoryRef.current.clear();
-    setBlockHistoryVersion(v => v + 1);
-    setSubtitles(draft.subtitles);
-    historyRef.current = [draft.subtitles];
-    historyIndexRef.current = 0;
-    setHistory([draft.subtitles]);
-    setHistoryIndex(0);
-    resetStreamHistory(draft.subtitles);
-    setOriginalTimingMap(createOriginalTimingMap(draft.subtitles));
-    setSelectedIndices(new Set());
-    setActiveDraftId(draft.id);
-    setFileName(draft.fileName);
-    setDetectedFormat(draft.detectedFormat || 'Saved Draft');
-    setContext(draft.context || '');
-    setCustomPrompt(draft.customPrompt || '');
-    if (draft.translationSettings) setTranslationSettings(draft.translationSettings);
-    if (draft.activeStylingConfig) setActiveStylingConfig(draft.activeStylingConfig);
-    const draftHasTags = Boolean(draft.subtitles?.some(s => hasFormatting(s.translatedText || s.text || '')));
-    setHasAppliedCustomStyle(draftHasTags);
-    setIsWorkspaceStylingPreview(draftHasTags);
-    setQcFilter('all');
-    dbService.clearCrashSnapshot().catch(() => {});
-    setCrashSnapshot(null);
-    setActiveTab('workspace');
-    addLog(`Loaded draft "${draft.title}" (${draft.subtitleCount} lines).`, 'success');
-    addNotification(`Opened draft: ${draft.title}`, 'success');
-  }, [autoArchiveCurrentProject, addLog, addNotification, resetStreamHistory]);
+    await refreshDraftsAndStats();
+    addLog(`Renamed project to "${clean}".`, 'info');
+    addNotification(`Renamed to "${clean}"`, 'success');
+  }, [refreshDraftsAndStats, addLog, addNotification]);
+
+  const handleMoveDraft = useCallback(async (draft: ProjectDraft, targetList: ProjectListPlacement) => {
+    const updated: ProjectDraft = {
+      ...draft,
+      categoryPlacement: targetList,
+      updatedAt: new Date().toISOString(),
+    };
+    await dbService.saveDraft(updated);
+    await refreshDraftsAndStats();
+    const label =
+      targetList === 'translated'
+        ? 'Translated Subtitles'
+        : targetList === 'my-subtitles'
+        ? 'My Subtitles'
+        : 'Saved Drafts';
+    addNotification(`Moved "${draft.title}" to ${label}`, 'success');
+  }, [refreshDraftsAndStats, addNotification]);
 
   const handleDuplicateDraft = useCallback(async (draft: ProjectDraft) => {
     const copy: ProjectDraft = {
       ...draft,
       id: `draft-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       title: `${draft.title} (Copy)`,
+      isRenamedTitle: true,
       updatedAt: new Date().toISOString(),
     };
     await dbService.saveDraft(copy);
@@ -3743,10 +4411,84 @@ export default function App() {
 
   const handleDeleteDraft = useCallback(async (id: string) => {
     await dbService.deleteDraft(id);
+    if (activeDraftIdRef.current === id) activeDraftIdRef.current = null;
     setActiveDraftId(prev => (prev === id ? null : prev));
     await refreshDraftsAndStats();
     addNotification('Draft removed', 'success');
   }, [refreshDraftsAndStats, addNotification]);
+
+  const handleOpenMySubtitleFile = useCallback((file: StoredSubtitleFile) => {
+    const f = new File([file.content], file.name, {
+      type: 'text/plain',
+      lastModified: file.lastModified || Date.now(),
+    });
+    void processSubtitleFile(f).then(() => {
+      if (file.displayName) {
+        setSyncedBaseTitle(file.displayName);
+      }
+      if (file.draftId && draftsRef.current.some((d) => d.id === file.draftId)) {
+        activeDraftIdRef.current = file.draftId;
+        setActiveDraftId(file.draftId);
+      }
+    });
+  }, [processSubtitleFile]);
+
+  const handleRenameMySubtitleFile = useCallback(async (file: StoredSubtitleFile, newTitle: string) => {
+    const clean = newTitle.trim();
+    if (!clean) return;
+    const updated: StoredSubtitleFile = {
+      ...file,
+      displayName: clean,
+    };
+    await dbService.saveMySubtitlesFiles([updated]);
+    const list = await dbService.listMySubtitlesFiles();
+    setMySubtitlesFiles(list);
+    window.dispatchEvent(new CustomEvent('urduLocalizerMySubtitlesChanged'));
+    if (file.draftId && file.draftId === activeDraftIdRef.current) {
+      setSyncedBaseTitle(clean);
+    }
+    addNotification(`Renamed to "${clean}"`, 'success');
+  }, [addNotification]);
+
+  const handleMoveMySubtitleFile = useCallback(async (file: StoredSubtitleFile, targetFolder: string) => {
+    const updated: StoredSubtitleFile = {
+      ...file,
+      subFolder: targetFolder,
+      folderName: targetFolder,
+      relativePath: `${targetFolder}/${file.name}`,
+    };
+    await dbService.saveMySubtitlesFiles([updated]);
+    const list = await dbService.listMySubtitlesFiles();
+    setMySubtitlesFiles(list);
+    window.dispatchEvent(new CustomEvent('urduLocalizerMySubtitlesChanged'));
+    addNotification(`Moved "${file.displayName || file.name}" to ${targetFolder}`, 'success');
+  }, [addNotification]);
+
+  const handleDeleteMySubtitleFile = useCallback(async (id: string) => {
+    await dbService.deleteMySubtitleFile(id);
+    const list = await dbService.listMySubtitlesFiles();
+    setMySubtitlesFiles(list);
+    window.dispatchEvent(new CustomEvent('urduLocalizerMySubtitlesChanged'));
+    addNotification('Removed from My Subtitles', 'success');
+  }, [addNotification]);
+
+  const handleSyncExportTitleToProject = useCallback((newTitle: string) => {
+    setSyncedBaseTitle(newTitle);
+    const curId = activeDraftIdRef.current;
+    if (curId && newTitle.trim()) {
+      const curDraft = draftsRef.current.find((d) => d.id === curId);
+      if (curDraft && curDraft.title !== newTitle.trim()) {
+        const updatedDraft: ProjectDraft = {
+          ...curDraft,
+          title: newTitle.trim(),
+          isRenamedTitle: true,
+        };
+        void dbService.saveDraft(updatedDraft).then(() => {
+          dbService.listDrafts().then(setDrafts).catch(() => {});
+        });
+      }
+    }
+  }, []);
 
   const handleRecoverCrash = useCallback(() => {
     if (!crashSnapshot) return;
@@ -3910,28 +4652,30 @@ export default function App() {
       setHasPendingStyleBake(false);
       return;
     }
-    const styled = applyGradientsToSubtitles(
-      subtitles,
-      activeStylingConfig.paletteId,
-      activeStylingConfig.gradientMode,
-      activeStylingConfig.targetStreams,
-      {
-        customColors: activeStylingConfig.customColors,
-        boldEmphasis: activeStylingConfig.boldEmphasis,
-        italicize: activeStylingConfig.italicize,
-        uppercaseOriginal: activeStylingConfig.transformCase === 'uppercase',
-      }
-    );
-    updateSubtitles(styled);
-    setHasAppliedCustomStyle(true);
-    setIsWorkspaceStylingPreview(true);
-    setHasPendingStyleBake(false);
-    addNotification(
-      silent ? 'Styles auto-baked onto subtitles' : 'Baked & applied all styles to subtitle project!',
-      'saved'
-    );
-    addLog('Baked active styling configuration onto subtitles.', 'success');
-  }, [subtitles, activeStylingConfig, updateSubtitles, addNotification, addLog]);
+    void runBulkWithLoader('Baking Subtitle Styles...', `Applying typography & gradient colors across ${subtitles.length} segments`, () => {
+      const styled = applyGradientsToSubtitles(
+        subtitles,
+        activeStylingConfig.paletteId,
+        activeStylingConfig.gradientMode,
+        activeStylingConfig.targetStreams,
+        {
+          customColors: activeStylingConfig.customColors,
+          boldEmphasis: activeStylingConfig.boldEmphasis,
+          italicize: activeStylingConfig.italicize,
+          uppercaseOriginal: activeStylingConfig.transformCase === 'uppercase',
+        }
+      );
+      updateSubtitles(styled);
+      setHasAppliedCustomStyle(true);
+      setIsWorkspaceStylingPreview(true);
+      setHasPendingStyleBake(false);
+      addNotification(
+        silent ? 'Styles auto-baked onto subtitles' : 'Baked & applied all styles to subtitle project!',
+        'saved'
+      );
+      addLog('Baked active styling configuration onto subtitles.', 'success');
+    });
+  }, [subtitles, activeStylingConfig, updateSubtitles, addNotification, addLog, runBulkWithLoader]);
 
   // Auto-bake pending styling edits when exiting the Styling Studio tab
   const prevTabRef = useRef<MobileTab>(activeTab);
@@ -4033,16 +4777,16 @@ export default function App() {
   const [isWorkerMonitorOpen, setIsWorkerMonitorOpen] = useState(false);
   const [workerStates, setWorkerStates] = useState<Record<string, { id: number, status: 'idle' | 'working' | 'completed', currentItem?: number }>>({});
 
-  // Debounce search input to avoid searching on every single keystroke
+  // Fast search filter response without lag
   useEffect(() => {
     const timer = setTimeout(() => {
       setSearchTerm(searchInput);
       setCurrentPage(1);
-    }, 200);
+    }, 65);
     return () => clearTimeout(timer);
   }, [searchInput]);
 
-  // Escape key & Global Undo/Redo Shortcuts
+  // Escape key & Global Undo/Redo Shortcuts + Close footer tap-to-reveal on outside click
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -4051,6 +4795,7 @@ export default function App() {
         setIsHomeDrawerOpen(false);
         setIsTranslatorDrawerOpen(false);
         setIsWorkspaceDrawerOpen(false);
+        setIsWorkspaceFooterExpanded(false);
       }
 
       // Global Undo/Redo Shortcuts (when not editing an input or textarea)
@@ -4077,6 +4822,17 @@ export default function App() {
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, [handleUndo, handleRedo]);
+
+  useEffect(() => {
+    if (!isWorkspaceFooterExpanded) return;
+    const handleOutsideTap = (e: PointerEvent) => {
+      const target = e.target as Element | null;
+      if (target && target.closest('[data-ws-footer-root="true"]')) return;
+      setIsWorkspaceFooterExpanded(false);
+    };
+    document.addEventListener('pointerdown', handleOutsideTap);
+    return () => document.removeEventListener('pointerdown', handleOutsideTap);
+  }, [isWorkspaceFooterExpanded]);
 
   // Per-block Undo / Redo helpers
   const recordBlockEdit = useCallback((
@@ -4213,11 +4969,13 @@ export default function App() {
       return;
     }
     const count = selectedIndices.size;
-    updateSubtitles(prev => batchDeleteSubtitles(prev, selectedIndices));
-    setSelectedIndices(new Set());
-    addNotification(`Deleted ${count} selected subtitle(s)`, "success");
-    addLog(`Batch deleted ${count} subtitle segments.`, "info");
-  }, [selectedIndices, isReadOnly, updateSubtitles, addNotification, addLog]);
+    void runBulkWithLoader('Deleting Selected Rows...', `Removing ${count} subtitle row(s)`, () => {
+      updateSubtitles(prev => batchDeleteSubtitles(prev, selectedIndices));
+      setSelectedIndices(new Set());
+      addNotification(`Deleted ${count} selected subtitle(s)`, "success");
+      addLog(`Batch deleted ${count} subtitle segments.`, "info");
+    });
+  }, [selectedIndices, isReadOnly, updateSubtitles, addNotification, addLog, runBulkWithLoader]);
 
   // Per-stream Undo / Redo helpers
   const canUndoStream = useCallback((field: WorkspaceStreamField) => {
@@ -4282,15 +5040,17 @@ export default function App() {
       return;
     }
     if (subtitlesRef.current.length === 0) return;
-    const { updatedSubtitles, splitBlocksCount, createdBlocksCount } = splitAllLongSubtitles(subtitlesRef.current, 2, 42);
-    if (splitBlocksCount === 0) {
-      addNotification("All subtitle blocks are already short (≤ 2 lines)", "success");
-      return;
-    }
-    updateSubtitles(updatedSubtitles);
-    addNotification(`Divided ${splitBlocksCount} long subtitle block(s) into ${splitBlocksCount + createdBlocksCount} ≤ 2-line segments`, "success");
-    addLog(`Divided ${splitBlocksCount} long subtitle block(s) into ${splitBlocksCount + createdBlocksCount} compact ≤ 2-line segments.`, "success");
-  }, [isReadOnly, updateSubtitles, addNotification, addLog]);
+    void runBulkWithLoader('Splitting Long Subtitles...', `Checking and splitting ${subtitlesRef.current.length} blocks into ≤2 lines`, () => {
+      const { updatedSubtitles, splitBlocksCount, createdBlocksCount } = splitAllLongSubtitles(subtitlesRef.current, 2, 42);
+      if (splitBlocksCount === 0) {
+        addNotification("All subtitle blocks are already short (≤ 2 lines)", "success");
+        return;
+      }
+      updateSubtitles(updatedSubtitles);
+      addNotification(`Divided ${splitBlocksCount} long subtitle block(s) into ${splitBlocksCount + createdBlocksCount} ≤ 2-line segments`, "success");
+      addLog(`Divided ${splitBlocksCount} long subtitle block(s) into ${splitBlocksCount + createdBlocksCount} compact ≤ 2-line segments.`, "success");
+    });
+  }, [isReadOnly, updateSubtitles, addNotification, addLog, runBulkWithLoader]);
 
   const colHeaderLongPressRef = useRef<{ timer: ReturnType<typeof setTimeout> | null; x: number; y: number }>({
     timer: null,
@@ -4406,22 +5166,24 @@ export default function App() {
       onConfirm: () => {
         setConfirmDialog(null);
         if (historyRef.current.length > 0) {
-          const baseline = historyRef.current[0];
-          subtitlesRef.current = baseline;
-          setSubtitles(baseline);
-          historyRef.current = [baseline];
-          historyIndexRef.current = 0;
-          setHistory([baseline]);
-          setHistoryIndex(0);
-          blockHistoryRef.current.clear();
-          setBlockHistoryVersion(v => v + 1);
-          resetStreamHistory(baseline);
-          addNotification('Reset to baseline', 'success');
-          addLog('Reset subtitles to initial baseline.', 'warning');
+          void runBulkWithLoader('Restoring Baseline...', 'Reverting edits back to initial project snapshot', () => {
+            const baseline = historyRef.current[0];
+            subtitlesRef.current = baseline;
+            setSubtitles(baseline);
+            historyRef.current = [baseline];
+            historyIndexRef.current = 0;
+            setHistory([baseline]);
+            setHistoryIndex(0);
+            blockHistoryRef.current.clear();
+            setBlockHistoryVersion(v => v + 1);
+            resetStreamHistory(baseline);
+            addNotification('Reset to baseline', 'success');
+            addLog('Reset subtitles to initial baseline.', 'warning');
+          });
         }
       },
     });
-  }, [addNotification, addLog, resetStreamHistory]);
+  }, [addNotification, addLog, resetStreamHistory, runBulkWithLoader]);
 
   const confirmClearSingleField = useCallback((index: number, field: WorkspaceStreamField) => {
     const label = field === 'orig' ? 'Original' : field === 'ai' ? 'AI Translation' : 'Neutral / Google';
@@ -4481,15 +5243,25 @@ export default function App() {
       active: false,
       startX: 0,
       startY: 0,
+      fromEdge: false,
     };
 
     const startIfRightEdge = (clientX: number, clientY: number, target: EventTarget | null) => {
       const el = target as HTMLElement | null;
-      if (el && el.closest('input[type="range"]')) return;
-      if (clientX >= window.innerWidth - 36) {
+      if (
+        el &&
+        el.closest('input, textarea, select, [data-swipe-ignore="true"], .overflow-x-auto')
+      ) {
+        edgeGesture.active = false;
+        return;
+      }
+      const nearRightEdge = clientX >= window.innerWidth - 36;
+      const inTranslatorRightZone = activeTab === 'translator' && clientX >= window.innerWidth * 0.55;
+      if (nearRightEdge || inTranslatorRightZone) {
         edgeGesture.active = true;
         edgeGesture.startX = clientX;
         edgeGesture.startY = clientY;
+        edgeGesture.fromEdge = nearRightEdge;
       } else {
         edgeGesture.active = false;
       }
@@ -4499,11 +5271,13 @@ export default function App() {
       if (!edgeGesture.active) return;
       const dx = clientX - edgeGesture.startX;
       const dy = clientY - edgeGesture.startY;
-      if (Math.abs(dy) > 22 && Math.abs(dy) > Math.abs(dx)) {
+      if (Math.abs(dy) > 26 && Math.abs(dy) > Math.abs(dx)) {
         edgeGesture.active = false;
         return;
       }
-      if (dx <= -24 && Math.abs(dx) > Math.abs(dy) * 1.15) {
+      const triggerDx = edgeGesture.fromEdge ? -22 : -44;
+      const ratio = edgeGesture.fromEdge ? 1.15 : 1.4;
+      if (dx <= triggerDx && Math.abs(dx) > Math.abs(dy) * ratio) {
         edgeGesture.active = false;
         openActiveTabDrawer();
       }
@@ -4547,6 +5321,7 @@ export default function App() {
       window.removeEventListener('pointerup', resetEdgeGesture);
     };
   }, [
+    activeTab,
     hasActiveDrawerForTab,
     isCurrentTabDrawerOpen,
     openActiveTabDrawer,
@@ -4568,13 +5343,15 @@ export default function App() {
     isFontsOpen,
   ]);
 
-  const TAB_ITEMS: { id: MobileTab; label: string; shortLabel: string; icon: any }[] = [
-    { id: 'home', label: 'Home', shortLabel: 'Home', icon: Home },
-    { id: 'translator', label: 'Translate', shortLabel: 'Translate', icon: Sparkles },
-    { id: 'workspace', label: 'Workspace', shortLabel: 'Workspace', icon: Languages },
-    { id: 'styling', label: 'Styling', shortLabel: 'Styling', icon: Palette },
-    { id: 'download', label: 'Export', shortLabel: 'Export', icon: Download },
-    { id: 'menu', label: 'Menu', shortLabel: 'Menu', icon: Settings },
+  const isMulticolor = preferences.multicoloredLayout ?? true;
+
+  const TAB_ITEMS: { id: MobileTab; label: string; shortLabel: string; icon: any; colorVar: string }[] = [
+    { id: 'home', label: 'Home', shortLabel: 'Home', icon: Home, colorVar: 'var(--tab-home-color)' },
+    { id: 'translator', label: 'Translate', shortLabel: 'Translate', icon: Sparkles, colorVar: 'var(--tab-translator-color)' },
+    { id: 'workspace', label: 'Workspace', shortLabel: 'Workspace', icon: Languages, colorVar: 'var(--tab-workspace-color)' },
+    { id: 'styling', label: 'Styling', shortLabel: 'Styling', icon: Palette, colorVar: 'var(--tab-styling-color)' },
+    { id: 'download', label: 'Export', shortLabel: 'Export', icon: Download, colorVar: 'var(--tab-download-color)' },
+    { id: 'menu', label: 'Menu', shortLabel: 'Menu', icon: Settings, colorVar: 'var(--tab-menu-color)' },
   ];
 
   const useMobileCards = isMobileViewport && preferences.mobileSubtitleView !== 'table';
@@ -4605,6 +5382,7 @@ export default function App() {
     isStylizerOpen ||
     isTranslationSettingsModalOpen ||
     isAndroidSetupModalOpen ||
+    Boolean(bulkLoadingOverlay) ||
     Boolean(confirmDialog) ||
     Boolean(fieldActionMenu) ||
     Boolean(columnHistoryMenu);
@@ -4616,20 +5394,28 @@ export default function App() {
 
   useEffect(() => {
     let lastScrollY = typeof window !== 'undefined' ? window.scrollY : 0;
+    let rafId: number | null = null;
     const onScroll = () => {
-      const currentY = window.scrollY;
-      const delta = currentY - lastScrollY;
-      if (currentY <= 30) {
-        setIsBottomNavVisible(true);
-      } else if (delta > 10 && currentY > 44) {
-        setIsBottomNavVisible(false);
-      } else if (delta < -8) {
-        setIsBottomNavVisible(true);
-      }
-      lastScrollY = currentY;
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        const currentY = window.scrollY;
+        const delta = currentY - lastScrollY;
+        if (currentY <= 30) {
+          setIsBottomNavVisible(prev => (prev ? prev : true));
+        } else if (delta > 10 && currentY > 44) {
+          setIsBottomNavVisible(prev => (prev ? false : prev));
+        } else if (delta < -8) {
+          setIsBottomNavVisible(prev => (prev ? prev : true));
+        }
+        lastScrollY = currentY;
+      });
     };
     window.addEventListener('scroll', onScroll, { passive: true });
-    return () => window.removeEventListener('scroll', onScroll);
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      if (rafId !== null) cancelAnimationFrame(rafId);
+    };
   }, []);
 
   // Totally hide header & footer chrome when virtual keyboard / inline editing is active
@@ -4688,12 +5474,16 @@ export default function App() {
 
   // Sync Android Status Bar with current theme
   useEffect(() => {
-    void syncAndroidStatusBarTheme(preferences.theme === 'classic');
+    void syncAndroidStatusBarTheme(
+      isLightAppTheme(preferences.theme),
+      getThemeCanvasColor(preferences.theme)
+    );
   }, [preferences.theme]);
 
   // Ref for Android hardware/gesture Back button & native lifecycle
   const androidBackHandlerRef = useRef<() => boolean>(() => false);
   androidBackHandlerRef.current = () => {
+    if (bulkLoadingOverlay) return true;
     if (confirmDialog) { setConfirmDialog(null); return true; }
     if (isAndroidSetupModalOpen) {
       try { localStorage.setItem('urdu_localizer_android_setup_done', '1'); } catch {}
@@ -4724,6 +5514,10 @@ export default function App() {
     if (isTranslatorDrawerOpen) { setIsTranslatorDrawerOpen(false); return true; }
     if (isWorkspaceDrawerOpen) { setIsWorkspaceDrawerOpen(false); return true; }
     if (isStylingDrawerOpen) { setIsStylingDrawerOpen(false); return true; }
+    if (activeTab === 'workspace' && isWorkspaceFooterExpanded) {
+      setIsWorkspaceFooterExpanded(false);
+      return true;
+    }
     if (activeTab !== 'home') {
       setActiveTab('home');
       return true;
@@ -4739,7 +5533,7 @@ export default function App() {
 
   useEffect(() => {
     const cleanup = initAndroidNativeShell({
-      isLightTheme: preferencesRef.current.theme === 'classic',
+      isLightTheme: isLightAppTheme(preferencesRef.current.theme),
       onKeyboardChange: (visible) => setIsKeyboardActive(visible),
       onNetworkChange: (connected) => setIsOnline(connected),
       onBackButton: () => androidBackHandlerRef.current(),
@@ -4781,13 +5575,13 @@ export default function App() {
     return cleanup;
   }, [addNotification]);
 
-  const showWorkspacePinnedFooter = activeTab === 'workspace' && filteredSubtitles.length > 0 && !isKeyboardActive;
+  const showWorkspacePinnedFooter = activeTab === 'workspace' && !isKeyboardActive;
 
   return (
     <div
       className={cn(
         'min-h-screen font-sans flex flex-col transition-colors duration-200 theme-root',
-        theme !== 'classic' && 'dark'
+        !isLightAppTheme(theme) && 'dark'
       )}
       style={{
         backgroundColor: 'var(--theme-canvas)',
@@ -4831,10 +5625,12 @@ export default function App() {
             return (
               <motion.div
                 key={n.id}
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.96 }}
-                className="pointer-events-auto px-3 py-2 rounded-xl border shadow-lg flex items-center gap-2 min-w-[200px] max-w-xs"
+                layout
+                initial={{ opacity: 0, x: 24, scale: 0.94 }}
+                animate={{ opacity: 1, x: 0, scale: 1 }}
+                exit={{ opacity: 0, x: 18, scale: 0.94 }}
+                transition={{ type: 'spring', stiffness: 440, damping: 30 }}
+                className="pointer-events-auto px-3 py-2 rounded-xl border shadow-lg flex items-center gap-2 min-w-[200px] max-w-xs will-change-transform"
                 style={{
                   backgroundColor: 'var(--theme-surface)',
                   borderColor: isErr
@@ -4865,13 +5661,13 @@ export default function App() {
       {!isKeyboardActive && (
       <header
         className={cn(
-          'sticky top-0 z-50 border-b px-3 sm:px-5 pt-safe flex items-center justify-between gap-2 backdrop-blur-md transition-all mobile-fixed-chrome overflow-x-clip',
+          'sticky top-0 z-50 border-b px-3 sm:px-5 pt-safe flex items-center justify-between gap-2 transition-colors duration-150 mobile-fixed-chrome overflow-x-clip mc-header',
           showHeaderCompact ? 'min-h-[40px] py-1' : 'min-h-[46px] py-1.5',
           isAnyOverlayOpen && 'pointer-events-none select-none'
         )}
         style={{
           backgroundColor: 'var(--theme-header)',
-          borderColor: 'var(--theme-border)',
+          borderColor: isMulticolor ? 'var(--theme-header-border)' : 'var(--theme-border)',
           color: 'var(--theme-text)',
         }}
       >
@@ -4881,14 +5677,23 @@ export default function App() {
           className="flex items-center gap-2 text-left min-w-0 cursor-pointer"
         >
           <div
-            className="w-7 h-7 rounded-lg flex items-center justify-center text-white shrink-0 overflow-hidden"
-            style={{ backgroundColor: 'var(--theme-accent)' }}
+            className="w-7 h-7 rounded-lg flex items-center justify-center text-white shrink-0 overflow-hidden shadow-sm vibrant-gradient-bg"
           >
             {(() => {
               const dev = preferences.developerSettings || DEFAULT_DEVELOPER_SETTINGS;
               const iconSize = 15;
               if (dev.iconId === 'custom' && dev.customIconDataUrl) {
-                return <img src={dev.customIconDataUrl} alt={dev.appName} className="w-full h-full object-cover" />;
+                return (
+                  <ResponsiveLazyImage
+                    src={dev.customIconDataUrl}
+                    alt={dev.appName}
+                    aspectRatio="1/1"
+                    sizes="28px"
+                    eager
+                    fallbackIcon={<Languages size={iconSize} className="text-white" />}
+                    className="w-full h-full"
+                  />
+                );
               }
               if (dev.iconId === 'sparkles') return <Sparkles size={iconSize} />;
               if (dev.iconId === 'clapperboard') return <Clapperboard size={iconSize} />;
@@ -4899,9 +5704,9 @@ export default function App() {
           </div>
           <div className="min-w-0">
             <h1 className="font-semibold tracking-tight text-xs sm:text-[13px] flex items-center gap-1 truncate">
-              <span className="truncate">{preferences.developerSettings?.appName || 'Urdu Localizer'}</span>
+              <span className="truncate mc-header-title">{preferences.developerSettings?.appName || 'Urdu Localizer'}</span>
               {(preferences.developerSettings?.appBadge ?? 'v3') && (
-                <span className="font-mono text-[10px] font-semibold shrink-0" style={{ color: 'var(--theme-accent)' }}>
+                <span className="font-mono text-[10px] font-semibold shrink-0" style={{ color: isMulticolor ? 'var(--theme-accent-text)' : 'var(--theme-accent)' }}>
                   {preferences.developerSettings?.appBadge ?? 'v3'}
                 </span>
               )}
@@ -4922,12 +5727,12 @@ export default function App() {
                 className="min-h-[32px] flex items-center gap-1.5 px-2.5 rounded-lg border text-[11px] font-semibold cursor-pointer"
                 style={{
                   backgroundColor: 'var(--theme-elevated)',
-                  borderColor: 'var(--theme-border)',
+                  borderColor: isMulticolor ? 'var(--theme-card-4-border)' : 'var(--theme-border)',
                   color: 'var(--theme-text)',
                 }}
                 title="AI Cinema"
               >
-                <Clapperboard size={13} style={{ color: 'var(--theme-accent)' }} />
+                <Clapperboard size={13} style={{ color: isMulticolor ? 'var(--tab-styling-color)' : 'var(--theme-accent)' }} />
                 <span>Cinema</span>
               </button>
             )}
@@ -4938,12 +5743,12 @@ export default function App() {
                 className="min-h-[32px] flex items-center gap-1.5 px-2.5 rounded-lg border text-[11px] font-semibold cursor-pointer"
                 style={{
                   backgroundColor: 'var(--theme-elevated)',
-                  borderColor: 'var(--theme-border)',
+                  borderColor: isMulticolor ? 'var(--theme-card-3-border)' : 'var(--theme-border)',
                   color: 'var(--theme-text)',
                 }}
                 title="Edit Studio"
               >
-                <Edit3 size={13} style={{ color: 'var(--theme-accent)' }} />
+                <Edit3 size={13} style={{ color: isMulticolor ? 'var(--tab-workspace-color)' : 'var(--theme-accent)' }} />
                 <span>Studio</span>
               </button>
             )}
@@ -4956,11 +5761,11 @@ export default function App() {
               className="min-h-[32px] flex items-center gap-1 px-2 rounded-lg border text-[10px] font-mono font-semibold tabular-nums cursor-pointer"
               style={{
                 backgroundColor: isOnScreenSlidersOpen ? 'var(--theme-accent-soft)' : 'var(--theme-elevated)',
-                borderColor: isOnScreenSlidersOpen ? 'var(--theme-accent)' : 'var(--theme-border)',
+                borderColor: isOnScreenSlidersOpen ? 'var(--theme-accent)' : (isMulticolor ? 'var(--theme-card-2-border)' : 'var(--theme-border)'),
               }}
               title="Zoom & Spacing Sliders"
             >
-              <ZoomIn size={12} style={{ color: 'var(--theme-accent)' }} />
+              <ZoomIn size={12} style={{ color: isMulticolor ? 'var(--theme-accent-2)' : 'var(--theme-accent)' }} />
               <span>{preferences.uiZoom}%</span>
             </button>
           )}
@@ -5036,22 +5841,30 @@ export default function App() {
               type="button"
               onClick={() => setActiveTab(tab.id)}
               className={cn(
-                'h-9 px-3.5 flex items-center gap-1.5 text-[11px] font-semibold transition-colors cursor-pointer border-b-2',
-                isActive ? 'opacity-100' : 'opacity-65 hover:opacity-100 border-transparent'
+                'relative h-9 px-3.5 flex items-center gap-1.5 text-[11px] font-semibold transition-colors cursor-pointer touch-tactile',
+                isActive ? 'opacity-100' : 'opacity-65 hover:opacity-100'
               )}
               style={
                 isActive
-                  ? { borderBottomColor: 'var(--theme-accent)', color: 'var(--theme-accent-text)' }
+                  ? { color: isMulticolor ? tab.colorVar : 'var(--theme-accent-text)' }
                   : { color: 'var(--theme-text)' }
               }
             >
-              <Icon size={14} />
+              <Icon size={14} style={!isActive && isMulticolor ? { color: tab.colorVar } : undefined} />
               <span>{tab.label}</span>
               {tab.id === 'translator' && (isTranslating || isGoogleTranslatingAll) && (
                 <Loader2 size={11} className="animate-spin" />
               )}
               {tab.id === 'workspace' && subtitles.length > 0 && (
                 <span className="text-[10px] font-mono opacity-70 tabular-nums">({subtitles.length})</span>
+              )}
+              {isActive && (
+                <motion.span
+                  layoutId="desktopTabUnderline"
+                  transition={{ type: 'spring', stiffness: 480, damping: 36 }}
+                  className="absolute bottom-0 inset-x-1.5 h-[2px] rounded-full"
+                  style={{ backgroundColor: isMulticolor ? tab.colorVar : 'var(--theme-accent)' }}
+                />
               )}
             </button>
           );
@@ -5092,15 +5905,24 @@ export default function App() {
           </motion.div>
         )}
 
+        <motion.div
+          key={activeTab}
+          initial={{ opacity: 0, y: 7 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+          className="flex-1 flex flex-col gap-3.5 min-h-0"
+        >
         {activeTab === 'home' && (
           <HomeTabView
             fileName={fileName}
+            syncedBaseTitle={syncedBaseTitle}
             detectedFormat={detectedFormat}
             subtitlesCount={stats.total}
             translatedCount={stats.translated}
             googleCount={stats.google}
             activeDraftId={activeDraftId}
             drafts={drafts}
+            mySubtitlesFiles={mySubtitlesFiles}
             crashSnapshot={crashSnapshot}
             onRecoverCrash={handleRecoverCrash}
             onDismissCrash={handleDismissCrash}
@@ -5109,11 +5931,21 @@ export default function App() {
             onLoadDemo={loadSampleSubtitles}
             onSaveCurrentAsDraft={handleSaveCurrentAsDraft}
             onLoadDraft={handleLoadDraft}
+            onLoadDraftVersion={handleLoadDraftVersion}
+            onRestoreDraft={handleRestoreDraft}
             onDuplicateDraft={handleDuplicateDraft}
+            onRenameDraft={handleRenameDraft}
+            onMoveDraft={handleMoveDraft}
             onDeleteDraft={handleDeleteDraft}
+            onOpenMySubtitleFile={handleOpenMySubtitleFile}
+            onRenameMySubtitleFile={handleRenameMySubtitleFile}
+            onMoveMySubtitleFile={handleMoveMySubtitleFile}
+            onDeleteMySubtitleFile={handleDeleteMySubtitleFile}
+            onOpenMySubtitlesDrawer={() => setIsHomeDrawerOpen(true)}
             onOpenWorkspace={() => setActiveTab('workspace')}
             onDiscardProject={resetProject}
             onOpenAiCinema={() => setIsAiCinemaOpen(true)}
+            isHeavyTranslationActive={isTranslating || isGoogleTranslatingAll}
           />
         )}
 
@@ -5149,20 +5981,18 @@ export default function App() {
             onStopTranslation={requestStopTranslation}
             onStopGoogleTranslate={requestStopGoogleTranslate}
             onOpenTranslationSettings={() => {
-              setFocusedSettingsCategory('translation');
-              setFocusedTranslationSub('language');
-              setActiveTab('menu');
+              setIsTranslatorDrawerOpen(true);
             }}
             onOpenAiConfig={() => {
-              setFocusedSettingsCategory('translation');
-              setFocusedTranslationSub('ai');
-              setActiveTab('menu');
+              setIsTranslatorDrawerOpen(true);
             }}
             onOpenGoogleConfig={() => {
               setFocusedSettingsCategory('translation');
               setFocusedTranslationSub('google');
               setActiveTab('menu');
             }}
+            onOpenTranslatorDrawer={() => setIsTranslatorDrawerOpen(true)}
+            activeModelLabel={resolvedSelectedModel.name}
             onAnalyzeSubtitles={analyzeSubtitles}
             onChangeContext={setContext}
             onChangeCustomPrompt={setCustomPrompt}
@@ -5209,7 +6039,11 @@ export default function App() {
           <DownloadTabView
             subtitles={subtitles}
             fileName={fileName}
+            syncedBaseTitle={syncedBaseTitle}
+            onChangeSyncedBaseTitle={handleSyncExportTitleToProject}
+            onGoTranslate={() => setActiveTab('translator')}
             detectedFormat={detectedFormat}
+            context={context}
             translationSettings={translationSettings}
             isTranslating={isTranslating}
             isGoogleTranslatingAll={isGoogleTranslatingAll}
@@ -5217,6 +6051,15 @@ export default function App() {
             onChangeAndroidSaveMode={(mode: AndroidSaveMode) =>
               updatePreferences((prev) => ({ ...prev, androidSaveMode: mode }))
             }
+            autoCategorizeFolders={preferences.autoCategorizeExportFolders ?? true}
+            onToggleAutoCategorizeFolders={(enabled) =>
+              updatePreferences((prev) => ({ ...prev, autoCategorizeExportFolders: enabled }))
+            }
+            autoTagFileNames={preferences.autoTagExportFileNames ?? true}
+            onToggleAutoTagFileNames={(enabled) =>
+              updatePreferences((prev) => ({ ...prev, autoTagExportFileNames: enabled }))
+            }
+            onSuggestShortFileName={handleSuggestShortFileName}
             lastExportNotice={lastExportNotice}
             onDismissLastExportNotice={() => setLastExportNotice(null)}
             onDownloadFormatted={downloadFormattedSubtitles}
@@ -5236,11 +6079,11 @@ export default function App() {
             onUpdateTranslationSettings={setTranslationSettings}
             selectedModel={selectedModel}
             onUpdateModel={(newModel) => {
-              setSelectedModel(newModel);
-              updateGeminiConfig(newModel);
+              handleSelectModel(newModel);
             }}
-            geminiApiKey={geminiApiKey}
-            onUpdateGeminiApiKey={setGeminiApiKey}
+            customModels={customAiModels}
+            geminiApiKey={activeModelApiKey}
+            onUpdateGeminiApiKey={handleChangeActiveModelApiKey}
             onApplyGeminiApiKey={(key) => { void handleApplyGeminiApiKey(key); }}
             googleApiKey={googleApiKey}
             onUpdateGoogleApiKey={setGoogleApiKey}
@@ -5269,7 +6112,7 @@ export default function App() {
             onDeleteLocalFont={handleDeleteLocalFontById}
             onExportBackup={handleExportBackup}
             onImportBackup={handleImportBackup}
-            onSaveCurrentDraftQuick={() => handleSaveCurrentAsDraft(fileName ? `${fileName} Draft` : `Quick Draft ${new Date().toLocaleTimeString()}`)}
+            onSaveCurrentDraftQuick={() => handleSaveCurrentAsDraft(syncedBaseTitle || fileName || `Quick Draft ${new Date().toLocaleTimeString()}`)}
             onClearAllDrafts={handleClearAllDrafts}
             onDiscardActiveProject={resetProject}
             onOpenCinemaStudio={() => setIsAiCinemaOpen(true)}
@@ -5280,8 +6123,8 @@ export default function App() {
         )}
 
         {activeTab === 'workspace' && (
-          <div id="subtitles-workspace" className="space-y-5 flex flex-col min-h-0">
-            {/* Workspace */}
+          <div id="subtitles-workspace" className="space-y-4 flex flex-col min-h-0">
+            {/* Workspace (Header controls moved cleanly into Tap-to-Reveal Footer) */}
             <ResizableBox 
               title="Translation Workspace" 
               icon={Languages} 
@@ -5290,67 +6133,8 @@ export default function App() {
               maxHeight={2000}
               isFullScreen={isFullScreen}
               onFullScreenToggle={() => setIsFullScreen(!isFullScreen)}
-              actions={
-                <div className="flex items-center gap-1 flex-wrap shrink-0">
-                  <button
-                    type="button"
-                    onClick={handleUndo}
-                    disabled={historyIndex <= 0}
-                    className="min-h-[30px] px-2 rounded-md border text-[10px] font-semibold flex items-center gap-1 disabled:opacity-35 cursor-pointer"
-                    style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
-                    title="Undo (Ctrl+Z)"
-                  >
-                    <Undo2 size={11} className="text-amber-500" />
-                    <span className="hidden xs:inline">Undo</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleRedo}
-                    disabled={historyIndex >= history.length - 1}
-                    className="min-h-[30px] px-2 rounded-md border text-[10px] font-semibold flex items-center gap-1 disabled:opacity-35 cursor-pointer"
-                    style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
-                    title="Redo (Ctrl+Y)"
-                  >
-                    <Redo2 size={11} className="text-emerald-500" />
-                    <span className="hidden xs:inline">Redo</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleSplitAllLong}
-                    disabled={subtitles.length === 0 || isReadOnly}
-                    className="min-h-[30px] px-2 rounded-md border text-[10px] font-semibold flex items-center gap-1 disabled:opacity-35 cursor-pointer"
-                    style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
-                    title="Divide all long subtitle blocks into short ≤2-line segments"
-                  >
-                    <Scissors size={11} style={{ color: 'var(--theme-accent)' }} />
-                    <span>Split ≤2L</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleOpenEditor()}
-                    className="min-h-[30px] px-2 rounded-md border text-[10px] font-semibold flex items-center gap-1 cursor-pointer"
-                    style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
-                    title="Open Clean Studio"
-                  >
-                    <Edit3 size={11} style={{ color: 'var(--theme-accent)' }} />
-                    <span className="hidden sm:inline">Studio</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setIsWorkspaceDrawerOpen(true)}
-                    className="min-h-[30px] px-2.5 rounded-md text-white text-[10px] font-semibold flex items-center gap-1 cursor-pointer touch-tactile"
-                    style={{ backgroundColor: 'var(--theme-accent)' }}
-                    title="Workspace Tools & Utilities Drawer"
-                  >
-                    <Sliders size={11} />
-                    <span>Tools</span>
-                    {(selectedIndices.size > 0 || searchTerm || qcFilter !== 'all') && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-white/90" />
-                    )}
-                  </button>
-                </div>
-              }
-          >
+              hideHeader
+            >
             <div className="flex flex-col h-full min-h-0">
               {!visibleColumns.original && !visibleColumns.ai && !visibleColumns.google && (
                 <div className="px-3 py-2 border-b text-amber-500 text-xs flex items-center justify-between" style={{ borderColor: 'var(--theme-border)' }}>
@@ -5362,91 +6146,6 @@ export default function App() {
                   >
                     Show Columns
                   </button>
-                </div>
-              )}
-
-              {/* Mobile Card Quick Bar (always shows Split ≤2L + multilingual stream switches) */}
-              {useMobileCards && (
-                <div
-                  className="px-2.5 py-1.5 border-b flex flex-wrap items-center justify-between gap-1.5"
-                  style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
-                >
-                  <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => setIsWorkspaceDrawerOpen(true)}
-                      className="px-2 py-1 rounded-md text-[10px] font-semibold flex items-center gap-1 text-white cursor-pointer"
-                      style={{ backgroundColor: 'var(--theme-accent)' }}
-                    >
-                      <Sliders size={10} />
-                      <span>Tools</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleSplitAllLong}
-                      disabled={subtitles.length === 0 || isReadOnly}
-                      className="px-2 py-1 rounded-md border text-[10px] font-semibold flex items-center gap-1 disabled:opacity-35 cursor-pointer"
-                      style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
-                      title="Divide all long subtitle blocks into ≤2 lines"
-                    >
-                      <Scissors size={10} style={{ color: 'var(--theme-accent)' }} />
-                      <span>Split ≤2L</span>
-                    </button>
-                  </div>
-
-                  {preferences.mobileSubtitleView === 'stream-switch' ? (
-                    <div className="flex items-center gap-1 p-0.5 rounded-lg border" style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}>
-                      {(
-                        [
-                          { id: 'ai', label: 'AI' },
-                          { id: 'google', label: 'Neutral' },
-                          { id: 'original', label: 'Orig' },
-                        ] as const
-                      ).map((st) => (
-                        <button
-                          key={st.id}
-                          type="button"
-                          onClick={() => setMobileFocusStream(st.id)}
-                          className={cn(
-                            'px-2 py-0.5 rounded text-[10px] font-semibold cursor-pointer',
-                            mobileFocusStream === st.id ? 'text-white' : 'opacity-65'
-                          )}
-                          style={mobileFocusStream === st.id ? { backgroundColor: 'var(--theme-accent)' } : undefined}
-                        >
-                          {st.label}
-                        </button>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-1 p-0.5 rounded-lg border" style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}>
-                      {(
-                        [
-                          { key: 'original', label: 'Orig' },
-                          { key: 'ai', label: 'AI' },
-                          { key: 'google', label: 'Neutral' },
-                        ] as const
-                      ).map((col) => {
-                        const active = visibleColumns[col.key];
-                        return (
-                          <button
-                            key={col.key}
-                            type="button"
-                            onClick={() =>
-                              setVisibleColumns((prev) => ({ ...prev, [col.key]: !prev[col.key] }))
-                            }
-                            className={cn(
-                              'px-2 py-0.5 rounded text-[10px] font-semibold cursor-pointer',
-                              active ? 'text-white' : 'opacity-55'
-                            )}
-                            style={active ? { backgroundColor: 'var(--theme-accent)' } : undefined}
-                            title={`Switch ${col.label} stream`}
-                          >
-                            {col.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
                 </div>
               )}
 
@@ -5495,7 +6194,7 @@ export default function App() {
                         </div>
                       </div>
                     ) : (
-                      progressiveWorkspaceSubtitles.map((item) => (
+                      paginatedSubtitles.map((item) => (
                         <div key={item.index} className="perf-row">
                           <MobileSubtitleCard
                             item={item}
@@ -5539,7 +6238,7 @@ export default function App() {
                 ) : (
                 <table className="w-max min-w-full text-left border-collapse">
                   <thead
-                    className="sticky top-0 backdrop-blur-md z-20 border-b"
+                    className="sticky top-0 z-20 border-b"
                     style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
                   >
                     <tr className="opacity-85">
@@ -5786,7 +6485,7 @@ export default function App() {
                         </td>
                       </tr>
                     )}
-                    {progressiveWorkspaceSubtitles.map((item) => (
+                    {paginatedSubtitles.map((item) => (
                       <SubtitleRow
                         key={item.index}
                         item={item}
@@ -5828,80 +6527,333 @@ export default function App() {
           </ResizableBox>
           </div>
         )}
+        </motion.div>
       </main>
 
-      {/* Always-Pinned Workspace Viewport Footer (sits right above auto-hiding bottom nav; totally hidden when keyboard is active) */}
+      {/* Always-Pinned Workspace Viewport Footer with Tap-to-Reveal Header Controls */}
       {showWorkspacePinnedFooter && (
         <footer
+          data-ws-footer-root="true"
           className={cn(
-            'fixed inset-x-0 z-30 mobile-fixed-chrome border-t backdrop-blur-md px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 text-[10px] select-none tabular-nums transition-[bottom] duration-200 shadow-sm',
+            'fixed inset-x-0 z-30 mobile-fixed-chrome border-t text-[10px] select-none tabular-nums transition-[bottom] duration-200 shadow-lg mc-footer',
             isBottomNavVisible
               ? 'bottom-[calc(48px+max(env(safe-area-inset-bottom,0px),6px))] lg:bottom-0'
               : 'bottom-0 pb-safe lg:bottom-0',
             isAnyOverlayOpen && 'pointer-events-none select-none'
           )}
           style={{
-            backgroundColor: 'var(--theme-header)',
-            borderColor: 'var(--theme-border)',
+            backgroundColor: isMulticolor ? 'var(--theme-footer)' : 'var(--theme-header)',
+            borderColor: isMulticolor ? 'var(--theme-footer-border)' : 'var(--theme-border)',
             color: 'var(--theme-text)',
           }}
         >
-          <div className="opacity-75 font-medium">
-            {pageSize === 0 ? 1 : (currentPage - 1) * pageSize + 1}–{pageSize === 0 ? filteredSubtitles.length : Math.min(currentPage * pageSize, filteredSubtitles.length)} / {filteredSubtitles.length}
-            {searchTerm && <span className="ml-1" style={{ color: 'var(--theme-accent)' }}>(filtered)</span>}
-          </div>
+          {/* Tap-to-Reveal Controls Drawer Panel (GPU transform+opacity animation, zero layout reflow lag) */}
+          <AnimatePresence>
+            {isWorkspaceFooterExpanded && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 8 }}
+                transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
+                className="border-b will-change-transform"
+                style={{ borderColor: 'var(--theme-border)', backgroundColor: 'var(--theme-elevated)' }}
+              >
+                <div className="px-3 py-2.5 space-y-2">
+                  {/* Row 1: Primary Workspace Header Controls */}
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={handleUndo}
+                      disabled={historyIndex <= 0}
+                      className="min-h-[30px] px-2.5 rounded-lg border text-[10px] font-semibold flex items-center gap-1 disabled:opacity-35 cursor-pointer"
+                      style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+                      title="Undo (Ctrl+Z)"
+                    >
+                      <Undo2 size={11} className="text-amber-500" />
+                      <span>Undo</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleRedo}
+                      disabled={historyIndex >= history.length - 1}
+                      className="min-h-[30px] px-2.5 rounded-lg border text-[10px] font-semibold flex items-center gap-1 disabled:opacity-35 cursor-pointer"
+                      style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+                      title="Redo (Ctrl+Y)"
+                    >
+                      <Redo2 size={11} className="text-emerald-500" />
+                      <span>Redo</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsWorkspaceFooterExpanded(false);
+                        handleSplitAllLong();
+                      }}
+                      disabled={subtitles.length === 0 || isReadOnly}
+                      className="min-h-[30px] px-2.5 rounded-lg border text-[10px] font-semibold flex items-center gap-1 disabled:opacity-35 cursor-pointer"
+                      style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+                      title="Divide all long subtitle blocks into ≤2 lines"
+                    >
+                      <Scissors size={11} style={{ color: 'var(--theme-accent)' }} />
+                      <span>Split ≤2L</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsWorkspaceFooterExpanded(false);
+                        handleOpenEditor();
+                      }}
+                      className="min-h-[30px] px-2.5 rounded-lg border text-[10px] font-semibold flex items-center gap-1 cursor-pointer"
+                      style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+                      title="Open Clean Studio"
+                    >
+                      <Edit3 size={11} style={{ color: 'var(--theme-accent)' }} />
+                      <span>Studio</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsWorkspaceFooterExpanded(false);
+                        setIsFullScreen(prev => !prev);
+                      }}
+                      className="min-h-[30px] px-2.5 rounded-lg border text-[10px] font-semibold flex items-center gap-1 cursor-pointer"
+                      style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+                      title={isFullScreen ? 'Exit Full Screen' : 'Full Screen'}
+                    >
+                      {isFullScreen ? <Minimize2 size={11} /> : <Maximize2 size={11} />}
+                      <span>{isFullScreen ? 'Exit Full' : 'Full Screen'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsWorkspaceFooterExpanded(false);
+                        setIsWorkspaceDrawerOpen(true);
+                      }}
+                      className="min-h-[30px] px-2.5 rounded-lg text-white text-[10px] font-semibold flex items-center gap-1 cursor-pointer touch-tactile"
+                      style={{ backgroundColor: 'var(--theme-accent)' }}
+                      title="Workspace Tools & Utilities Drawer"
+                    >
+                      <Sliders size={11} />
+                      <span>Tools</span>
+                      {(selectedIndices.size > 0 || searchTerm || qcFilter !== 'all') && (
+                        <span className="w-1.5 h-1.5 rounded-full bg-white/90" />
+                      )}
+                    </button>
+                  </div>
 
-          <div className="flex items-center gap-2 flex-wrap">
-            <div className="flex items-center gap-1">
-              <span className="opacity-60">Rows:</span>
-              {[25, 50, 100, 0].map((size) => (
-                <button
-                  key={size}
-                  type="button"
-                  onClick={() => {
-                    setPageSize(size);
-                    setCurrentPage(1);
-                  }}
-                  className={cn(
-                    'px-1.5 py-0.5 rounded font-mono font-semibold cursor-pointer border',
-                    pageSize === size ? 'text-white' : 'opacity-70'
-                  )}
-                  style={
-                    pageSize === size
-                      ? { backgroundColor: 'var(--theme-accent)', borderColor: 'var(--theme-accent)' }
-                      : { backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }
-                  }
-                >
-                  {size === 0 ? 'All' : size}
-                </button>
-              ))}
+                  {/* Row 2: Stream Focus / Column Toggles + Selection */}
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    {useMobileCards && preferences.mobileSubtitleView === 'stream-switch' ? (
+                      <div className="flex items-center gap-1 p-0.5 rounded-lg border" style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}>
+                        <span className="px-1.5 opacity-60 font-semibold">Stream:</span>
+                        {(
+                          [
+                            { id: 'ai', label: 'AI' },
+                            { id: 'google', label: 'Neutral' },
+                            { id: 'original', label: 'Orig' },
+                          ] as const
+                        ).map((st) => (
+                          <button
+                            key={st.id}
+                            type="button"
+                            onClick={() => setMobileFocusStream(st.id)}
+                            className={cn(
+                              'px-2 py-0.5 rounded text-[10px] font-semibold cursor-pointer',
+                              mobileFocusStream === st.id ? 'text-white' : 'opacity-70'
+                            )}
+                            style={mobileFocusStream === st.id ? { backgroundColor: 'var(--theme-accent)' } : undefined}
+                          >
+                            {st.label}
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1 p-0.5 rounded-lg border" style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}>
+                        <span className="px-1.5 opacity-60 font-semibold">Cols:</span>
+                        {(
+                          [
+                            { key: 'original', label: 'Orig' },
+                            { key: 'ai', label: 'AI' },
+                            { key: 'google', label: 'Neutral' },
+                          ] as const
+                        ).map((col) => {
+                          const active = visibleColumns[col.key];
+                          return (
+                            <button
+                              key={col.key}
+                              type="button"
+                              onClick={() =>
+                                setVisibleColumns((prev) => ({ ...prev, [col.key]: !prev[col.key] }))
+                              }
+                              className={cn(
+                                'px-2 py-0.5 rounded text-[10px] font-semibold cursor-pointer',
+                                active ? 'text-white' : 'opacity-60'
+                              )}
+                              style={active ? { backgroundColor: 'var(--theme-accent)' } : undefined}
+                            >
+                              {col.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {filteredSubtitles.length > 0 && (
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={toggleSelectAll}
+                          className="px-2 py-1 rounded-md border font-semibold cursor-pointer"
+                          style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+                        >
+                          {selectedIndices.size === filteredSubtitles.length ? 'Deselect All' : 'Select All'}
+                        </button>
+                        {selectedIndices.size > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setSelectedIndices(new Set())}
+                            className="px-2 py-1 rounded-md border font-semibold text-amber-500 cursor-pointer"
+                            style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+                          >
+                            Clear ({selectedIndices.size})
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Row 3: Row Density & Pagination */}
+                  <div className="flex items-center justify-between gap-2 flex-wrap pt-0.5">
+                    <div className="flex items-center gap-1">
+                      <span className="opacity-65 font-semibold">Rows:</span>
+                      {[0, 100, 50, 25].map((size) => (
+                        <button
+                          key={size}
+                          type="button"
+                          onClick={() => {
+                            setPageSize(size);
+                            setCurrentPage(1);
+                          }}
+                          className={cn(
+                            'px-2 py-0.5 rounded font-mono font-semibold cursor-pointer border',
+                            pageSize === size ? 'text-white' : 'opacity-75'
+                          )}
+                          style={
+                            pageSize === size
+                              ? { backgroundColor: 'var(--theme-accent)', borderColor: 'var(--theme-accent)' }
+                              : { backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }
+                          }
+                        >
+                          {size === 0 ? 'All' : size}
+                        </button>
+                      ))}
+                    </div>
+
+                    {pageSize > 0 && totalPages > 1 && (
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                          disabled={currentPage === 1}
+                          className="px-2 py-0.5 rounded border disabled:opacity-30 cursor-pointer font-semibold"
+                          style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+                        >
+                          Prev
+                        </button>
+                        <span className="font-mono px-1 font-semibold">
+                          {currentPage}/{totalPages}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                          disabled={currentPage === totalPages}
+                          className="px-2 py-0.5 rounded border disabled:opacity-30 cursor-pointer font-semibold"
+                          style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+                        >
+                          Next
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Compact Always-Visible Footer Strip (Tap anywhere on strip or Controls button to reveal options) */}
+          <div
+            onClick={() => setIsWorkspaceFooterExpanded((prev) => !prev)}
+            className="px-3 py-1.5 flex items-center justify-between gap-2 cursor-pointer"
+          >
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="opacity-85 font-semibold truncate mc-footer-title">
+                {filteredSubtitles.length === 0
+                  ? '0 lines'
+                  : `${pageSize === 0 ? 1 : (currentPage - 1) * pageSize + 1}–${pageSize === 0 ? filteredSubtitles.length : Math.min(currentPage * pageSize, filteredSubtitles.length)} / ${filteredSubtitles.length}`}
+              </span>
+              {searchTerm && <span className="font-semibold" style={{ color: 'var(--theme-accent)' }}>(filtered)</span>}
+              {selectedIndices.size > 0 && (
+                <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-500 font-bold">
+                  {selectedIndices.size} sel
+                </span>
+              )}
             </div>
 
-            {pageSize > 0 && totalPages > 1 && (
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
-                  disabled={currentPage === 1}
-                  className="px-2 py-0.5 rounded border disabled:opacity-30 cursor-pointer font-semibold btn-inch-cap"
-                  style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
-                >
-                  Prev
-                </button>
-                <span className="font-mono px-1 font-semibold">
-                  {currentPage}/{totalPages}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
-                  disabled={currentPage === totalPages}
-                  className="px-2 py-0.5 rounded border disabled:opacity-30 cursor-pointer font-semibold btn-inch-cap"
-                  style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
-                >
-                  Next
-                </button>
-              </div>
-            )}
+            <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+              <button
+                type="button"
+                onClick={handleUndo}
+                disabled={historyIndex <= 0}
+                className="p-1.5 rounded-md border disabled:opacity-30 cursor-pointer"
+                style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+                title="Undo"
+                aria-label="Undo"
+              >
+                <Undo2 size={11} className="text-amber-500" />
+              </button>
+              <button
+                type="button"
+                onClick={handleRedo}
+                disabled={historyIndex >= history.length - 1}
+                className="p-1.5 rounded-md border disabled:opacity-30 cursor-pointer"
+                style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+                title="Redo"
+                aria-label="Redo"
+              >
+                <Redo2 size={11} className="text-emerald-500" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsWorkspaceDrawerOpen(true)}
+                className="px-2 py-1 rounded-md border font-semibold flex items-center gap-1 cursor-pointer"
+                style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+                title="Open Workspace Tools Drawer"
+              >
+                <Sliders size={11} style={{ color: 'var(--theme-accent)' }} />
+                <span>Tools</span>
+                {(selectedIndices.size > 0 || searchTerm || qcFilter !== 'all') && (
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: 'var(--theme-accent)' }} />
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsWorkspaceFooterExpanded((prev) => !prev)}
+                className={cn(
+                  'px-2.5 py-1 rounded-md font-semibold flex items-center gap-1 cursor-pointer border transition-colors',
+                  isWorkspaceFooterExpanded ? 'text-white' : ''
+                )}
+                style={
+                  isWorkspaceFooterExpanded
+                    ? { backgroundColor: 'var(--theme-accent)', borderColor: 'var(--theme-accent)' }
+                    : { backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }
+                }
+                aria-expanded={isWorkspaceFooterExpanded}
+                title={isWorkspaceFooterExpanded ? 'Hide workspace options' : 'Tap to reveal workspace options'}
+              >
+                <span>{isWorkspaceFooterExpanded ? 'Hide' : 'Options'}</span>
+                {isWorkspaceFooterExpanded ? <ChevronDown size={11} /> : <ChevronUp size={11} />}
+              </button>
+            </div>
           </div>
         </footer>
       )}
@@ -5910,13 +6862,13 @@ export default function App() {
       {!isKeyboardActive && (
       <nav
         className={cn(
-          'lg:hidden fixed bottom-0 inset-x-0 z-40 mobile-fixed-chrome backdrop-blur-md border-t px-1 pt-0.5 pb-safe grid grid-cols-6 items-center transition-transform duration-200',
+          'lg:hidden fixed bottom-0 inset-x-0 z-40 mobile-fixed-chrome border-t px-1 pt-0.5 pb-safe grid grid-cols-6 items-center transition-transform duration-180 will-change-transform mc-footer',
           !isBottomNavVisible && 'translate-y-full pointer-events-none',
           isAnyOverlayOpen && 'pointer-events-none select-none'
         )}
         style={{
-          backgroundColor: 'var(--theme-header)',
-          borderColor: 'var(--theme-border)',
+          backgroundColor: isMulticolor ? 'var(--theme-footer)' : 'var(--theme-header)',
+          borderColor: isMulticolor ? 'var(--theme-footer-border)' : 'var(--theme-border)',
           color: 'var(--theme-text)',
         }}
       >
@@ -5929,22 +6881,24 @@ export default function App() {
               type="button"
               onClick={() => setActiveTab(tab.id)}
               className={cn(
-                'relative flex flex-col items-center justify-center gap-0.5 py-1 min-h-[46px] min-w-0 text-[9.5px] font-semibold transition-colors cursor-pointer',
-                isActive ? 'opacity-100' : 'opacity-55 hover:opacity-90'
+                'relative flex flex-col items-center justify-center gap-0.5 py-1 min-h-[46px] min-w-0 text-[9.5px] font-semibold transition-colors cursor-pointer touch-tactile',
+                isActive ? 'opacity-100' : 'opacity-65 hover:opacity-95'
               )}
-              style={isActive ? { color: 'var(--theme-accent)' } : undefined}
+              style={isActive ? { color: isMulticolor ? tab.colorVar : 'var(--theme-accent)' } : undefined}
             >
               {isActive && (
-                <span
-                  className="absolute top-0 w-7 h-[2px] rounded-full"
-                  style={{ backgroundColor: 'var(--theme-accent)' }}
+                <motion.span
+                  layoutId="mobileBottomTabPill"
+                  transition={{ type: 'spring', stiffness: 480, damping: 34 }}
+                  className="absolute top-0 w-7 h-[2.5px] rounded-full"
+                  style={{ backgroundColor: isMulticolor ? tab.colorVar : 'var(--theme-accent)' }}
                 />
               )}
               <div className="relative">
                 {tab.id === 'translator' && (isTranslating || isGoogleTranslatingAll) ? (
-                  <Loader2 size={17} className="animate-spin" />
+                  <Loader2 size={17} className="animate-spin" style={isMulticolor ? { color: tab.colorVar } : undefined} />
                 ) : (
-                  <Icon size={17} />
+                  <Icon size={17} style={!isActive && isMulticolor ? { color: tab.colorVar } : undefined} />
                 )}
               </div>
               <span className="truncate max-w-full px-0.5">{tab.shortLabel}</span>
@@ -5973,9 +6927,11 @@ export default function App() {
         onClose={() => setIsStylizerOpen(false)}
         subtitles={subtitles}
         onApply={(styledSubs) => {
-          updateSubtitles(styledSubs);
-          setHasAppliedCustomStyle(true);
-          setIsWorkspaceStylingPreview(true);
+          void runBulkWithLoader('Applying Subtitle Styles...', `Formatting ${styledSubs.length} subtitle segments`, () => {
+            updateSubtitles(styledSubs);
+            setHasAppliedCustomStyle(true);
+            setIsWorkspaceStylingPreview(true);
+          });
         }}
         urduFont={urduFont}
         translatedFontSize={translatedFontSize}
@@ -5991,8 +6947,10 @@ export default function App() {
         selectedCount={selectedIndices.size}
         selectedIndices={selectedIndices}
         onApply={(updated, count) => {
-          updateSubtitles(updated);
-          addNotification(`Replaced ${count} occurrence(s)`, 'success');
+          void runBulkWithLoader('Applying Find & Replace...', `Updating ${count} replacement(s) across workspace`, () => {
+            updateSubtitles(updated);
+            addNotification(`Replaced ${count} occurrence(s)`, 'success');
+          });
         }}
         onAddLog={addLog}
       />
@@ -6005,8 +6963,10 @@ export default function App() {
         selectedCount={selectedIndices.size}
         selectedIndices={selectedIndices}
         onApply={(updated, shiftMs) => {
-          updateSubtitles(updated);
-          addNotification(`Shifted timestamps by ${shiftMs > 0 ? '+' : ''}${shiftMs}ms`, 'success');
+          void runBulkWithLoader('Shifting Timestamps...', `Applying ${shiftMs > 0 ? '+' : ''}${shiftMs}ms time shift`, () => {
+            updateSubtitles(updated);
+            addNotification(`Shifted timestamps by ${shiftMs > 0 ? '+' : ''}${shiftMs}ms`, 'success');
+          });
         }}
         onAddLog={addLog}
       />
@@ -6019,8 +6979,10 @@ export default function App() {
         selectedCount={selectedIndices.size}
         selectedIndices={selectedIndices}
         originalTimingMap={originalTimingMap}
-        onApply={(updated, summary) => {
-          updateSubtitles(updated);
+        onApply={(updated) => {
+          void runBulkWithLoader('Adjusting Gap Timings...', `Updating ${updated.length} subtitle blocks`, () => {
+            updateSubtitles(updated);
+          });
         }}
         onResetToOriginal={handleResetTimingsToOriginal}
         onAddLog={addLog}
@@ -6035,8 +6997,10 @@ export default function App() {
         selectedCount={selectedIndices.size}
         selectedIndices={selectedIndices}
         onApply={(updated) => {
-          updateSubtitles(updated);
-          addNotification('Text cleanup applied successfully', 'success');
+          void runBulkWithLoader('Applying Text Cleanup...', `Cleaning ${updated.length} subtitle segments`, () => {
+            updateSubtitles(updated);
+            addNotification('Text cleanup applied successfully', 'success');
+          });
         }}
         onAddLog={addLog}
       />
@@ -6047,8 +7011,10 @@ export default function App() {
         onClose={() => setIsWatermarkModalOpen(false)}
         subtitles={subtitles}
         onApplyWatermark={(updated) => {
-          updateSubtitles(updated);
-          addNotification("Watermark updated on first block!", "success");
+          void runBulkWithLoader('Updating Watermark...', 'Applying watermark block to project', () => {
+            updateSubtitles(updated);
+            addNotification("Watermark updated on first block!", "success");
+          });
         }}
         onAddLog={addLog}
       />
@@ -6110,6 +7076,7 @@ export default function App() {
         onClose={() => setIsAiCinemaOpen(false)}
         geminiService={geminiRef.current}
         isGeminiConnected={isGeminiConnected}
+        isHeavyTranslationActive={isTranslating || isGoogleTranslatingAll}
         onApplyContext={(contextText) => {
           setContext(contextText);
           addNotification("Applied AI Cinema context to subtitle workspace", "success");
@@ -6129,11 +7096,13 @@ export default function App() {
         }}
         subtitles={subtitles}
         onApply={(styledSubtitles) => {
-          updateSubtitles(styledSubtitles);
-          setHasAppliedCustomStyle(true);
-          setIsWorkspaceStylingPreview(true);
-          setHasPendingStyleBake(false);
-          addNotification("Applied stylized subtitle configuration to Translation Workspace", "saved");
+          void runBulkWithLoader('Applying Studio Styles...', `Updating ${styledSubtitles.length} subtitle blocks`, () => {
+            updateSubtitles(styledSubtitles);
+            setHasAppliedCustomStyle(true);
+            setIsWorkspaceStylingPreview(true);
+            setHasPendingStyleBake(false);
+            addNotification("Applied stylized subtitle configuration to Translation Workspace", "saved");
+          });
         }}
         urduFont={urduFont}
         onUpdateUrduFont={(f) => { setUrduFont(f); setHasPendingStyleBake(true); }}
@@ -6190,9 +7159,9 @@ export default function App() {
         onClose={() => setIsAiConfigOpen(false)}
         selectedModel={selectedModel}
         onUpdateModel={(newModel) => {
-          setSelectedModel(newModel);
-          updateGeminiConfig(newModel);
+          handleSelectModel(newModel);
         }}
+        customModels={customAiModels}
         onConnectGemini={connectGemini}
         connectStatus={geminiConnectStatus}
         isGeminiConnected={isGeminiConnected}
@@ -6239,8 +7208,8 @@ export default function App() {
             isAnyOverlayOpen && 'pointer-events-none select-none'
           )}
           style={{
-            backgroundColor: 'var(--theme-accent)',
-            borderColor: 'rgba(255,255,255,0.18)',
+            background: isMulticolor ? 'linear-gradient(135deg, #0284c7, #06b6d4)' : 'var(--theme-accent)',
+            borderColor: 'rgba(255,255,255,0.22)',
             color: '#ffffff',
           }}
           title="Open My Subtitles Folder Drawer (or swipe left from right edge)"
@@ -6358,36 +7327,7 @@ export default function App() {
         </div>
       )}
 
-      {activeTab === 'workspace' && !isWorkspaceDrawerOpen && !isKeyboardActive && (
-        <button
-          type="button"
-          onClick={() => setIsWorkspaceDrawerOpen(true)}
-          className={cn(
-            'fixed right-3.5 sm:right-5 z-[60] h-11 min-w-[46px] px-3.5 rounded-2xl border shadow-lg flex items-center justify-center gap-1.5 cursor-pointer touch-tactile transition-[bottom] duration-200 btn-inch-cap',
-            showWorkspacePinnedFooter
-              ? isBottomNavVisible
-                ? 'bottom-[calc(108px+max(env(safe-area-inset-bottom,0px),6px))] lg:bottom-[58px]'
-                : 'bottom-[calc(58px+max(env(safe-area-inset-bottom,0px),6px))] lg:bottom-[58px]'
-              : isBottomNavVisible
-              ? 'bottom-[calc(54px+max(env(safe-area-inset-bottom,0px),6px))] lg:bottom-5'
-              : 'bottom-[calc(14px+max(env(safe-area-inset-bottom,0px),6px))] lg:bottom-5',
-            isAnyOverlayOpen && 'pointer-events-none select-none'
-          )}
-          style={{
-            backgroundColor: 'var(--theme-accent)',
-            borderColor: 'rgba(255,255,255,0.18)',
-            color: '#ffffff',
-          }}
-          title="Open Workspace Tools Drawer (or swipe left from right edge)"
-          aria-label="Open Workspace Tools Drawer"
-        >
-          <Sliders size={15} className="shrink-0" />
-          <span className="text-[11px] font-semibold tracking-tight leading-none truncate">Tools</span>
-          {(selectedIndices.size > 0 || searchTerm || qcFilter !== 'all') && (
-            <span className="w-1.5 h-1.5 rounded-full bg-white/95 shrink-0" />
-          )}
-        </button>
-      )}
+      {/* Floating Tools pill removed on Workspace because Tools & moved header options live in the pinned footer */}
 
       {activeTab === 'styling' && !isStylingDrawerOpen && !isKeyboardActive && (
         <button
@@ -6401,8 +7341,8 @@ export default function App() {
             isAnyOverlayOpen && 'pointer-events-none select-none'
           )}
           style={{
-            backgroundColor: 'var(--theme-accent)',
-            borderColor: 'rgba(255,255,255,0.18)',
+            background: isMulticolor ? 'linear-gradient(135deg, #db2777, #f43f5e)' : 'var(--theme-accent)',
+            borderColor: 'rgba(255,255,255,0.22)',
             color: '#ffffff',
           }}
           title="Open Gradient Studio Drawer (or swipe left from right edge)"
@@ -6421,7 +7361,7 @@ export default function App() {
         onNotify={addNotification}
       />
 
-      {/* Translator Tab Exclusive Right-Side Drawer (Swipe Left from Right Edge) */}
+      {/* Translator Tab Exclusive Right-Side Drawer (Swipe Left from Right Side) */}
       <TranslatorDrawer
         isOpen={activeTab === 'translator' && isTranslatorDrawerOpen}
         onClose={() => setIsTranslatorDrawerOpen(false)}
@@ -6433,9 +7373,23 @@ export default function App() {
         translationSpeed={translationSpeed}
         selectedModel={selectedModel}
         onUpdateModel={(newModel) => {
-          setSelectedModel(newModel);
-          updateGeminiConfig(newModel);
+          handleSelectModel(newModel);
         }}
+        activeModelApiKey={activeModelApiKey}
+        onChangeActiveModelApiKey={handleChangeActiveModelApiKey}
+        onApplyAndConnectModel={(overrideModel, overrideKey) =>
+          handleApplyGeminiApiKey(overrideModel, overrideKey)
+        }
+        isAiConnected={isGeminiConnected}
+        aiConnectStatus={geminiConnectStatus}
+        aiConnectionNote={aiConnectionNote}
+        customModels={customAiModels}
+        onAddCustomModel={handleAddCustomModel}
+        onDeleteCustomModel={handleDeleteCustomModel}
+        googleRoutingMode={preferences.googleRoutingMode}
+        onUpdateGoogleRoutingMode={(mode) =>
+          updatePreferences((prev) => ({ ...prev, googleRoutingMode: mode }))
+        }
         geminiWorkers={geminiWorkers}
         onUpdateGeminiWorkers={setGeminiWorkers}
         geminiBatchSize={geminiBatchSize}
@@ -6670,7 +7624,7 @@ export default function App() {
           >
             <div
               onClick={(e) => e.stopPropagation()}
-              className="fixed z-[245] w-[224px] rounded-xl border shadow-2xl p-1.5 space-y-0.5 text-[11px]"
+              className="fixed z-[245] w-[224px] rounded-xl border shadow-2xl p-1.5 space-y-0.5 text-[11px] mc-popup mc-role-edit"
               style={{
                 ...menuStyle,
                 backgroundColor: 'var(--theme-surface)',
@@ -6678,7 +7632,7 @@ export default function App() {
                 color: 'var(--theme-text)',
               }}
             >
-              <div className="px-2 py-1 text-[9.5px] font-bold uppercase tracking-wider opacity-60 border-b mb-1 flex items-center justify-between" style={{ borderColor: 'var(--theme-border)' }}>
+              <div className="px-2 py-1 text-[9.5px] font-bold uppercase tracking-wider opacity-60 border-b rounded-t-lg mb-1 flex items-center justify-between mc-popup-header mc-popup-title" style={{ borderColor: 'var(--theme-border)' }}>
                 <span>Block #{targetSub.index} · {fieldLabel}</span>
               </div>
               {!isReadOnly && (
@@ -6873,7 +7827,7 @@ export default function App() {
           >
             <div
               onClick={(e) => e.stopPropagation()}
-              className="fixed z-[245] w-[224px] rounded-xl border shadow-2xl p-2 space-y-1.5 text-[11px]"
+              className="fixed z-[245] w-[224px] rounded-xl border shadow-2xl p-2 space-y-1.5 text-[11px] mc-popup mc-role-timing"
               style={{
                 ...menuStyle,
                 backgroundColor: 'var(--theme-surface)',
@@ -6881,7 +7835,7 @@ export default function App() {
                 color: 'var(--theme-text)',
               }}
             >
-              <div className="px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wider opacity-65 border-b" style={{ borderColor: 'var(--theme-border)' }}>
+              <div className="px-2 py-1 text-[9.5px] font-bold uppercase tracking-wider opacity-65 border-b rounded-t-lg mc-popup-header mc-popup-title" style={{ borderColor: 'var(--theme-border)' }}>
                 {label}
               </div>
               <div className="flex items-center gap-1.5">
@@ -6935,7 +7889,7 @@ export default function App() {
       {/* First-Launch Android Permissions & Export Folder Setup Modal */}
       {isAndroidSetupModalOpen && (
         <div
-          className="fixed inset-0 z-[260] bg-black/60 backdrop-blur-md flex items-center justify-center p-4"
+          className="fixed inset-0 z-[260] bg-black/52 backdrop-touch-lock flex items-center justify-center p-4"
           onClick={() => {
             try { localStorage.setItem('urdu_localizer_android_setup_done', '1'); } catch {}
             setIsAndroidSetupModalOpen(false);
@@ -6945,7 +7899,7 @@ export default function App() {
             role="dialog"
             aria-modal="true"
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-sm rounded-2xl border shadow-2xl overflow-hidden animate-in zoom-in-95 duration-150"
+            className="w-full max-w-sm rounded-2xl border shadow-2xl overflow-hidden anim-pop-in"
             style={{
               backgroundColor: 'var(--theme-surface)',
               borderColor: 'var(--theme-border)',
@@ -7046,6 +8000,53 @@ export default function App() {
         </div>
       )}
 
+      {/* Blocking Loading Popup for Heavy / Bulk Operations */}
+      <AnimatePresence>
+        {bulkLoadingOverlay && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.14 }}
+            role="alertdialog"
+            aria-modal="true"
+            aria-busy="true"
+            className="fixed inset-0 z-[320] bg-black/68 flex items-center justify-center p-4 select-none"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.92, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94, y: 8 }}
+              transition={{ type: 'spring', stiffness: 440, damping: 30 }}
+              className="w-full max-w-xs rounded-2xl border shadow-2xl p-5 flex flex-col items-center text-center gap-3 mc-popup will-change-transform"
+              style={{
+                backgroundColor: 'var(--theme-popup-bg, var(--theme-surface))',
+                borderColor: 'var(--theme-popup-border, var(--theme-border))',
+                color: 'var(--theme-text)',
+              }}
+            >
+              <div
+                className="w-11 h-11 rounded-2xl flex items-center justify-center border shadow-sm"
+                style={{
+                  backgroundColor: 'var(--theme-elevated)',
+                  borderColor: 'var(--theme-border)',
+                }}
+              >
+                <Loader2 size={22} className="animate-spin" style={{ color: 'var(--theme-accent)' }} />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-sm font-bold tracking-tight mc-popup-title">
+                  {bulkLoadingOverlay.title}
+                </h3>
+                <p className="text-[11px] opacity-75 leading-snug">
+                  {bulkLoadingOverlay.detail || 'Applying changes across subtitles. Please wait...'}
+                </p>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Shared Yes / No Confirmation Dialog for Critical Workspace Actions */}
       <ConfirmDialogModal
         isOpen={Boolean(confirmDialog)}
@@ -7077,8 +8078,8 @@ export default function App() {
       <style dangerouslySetInnerHTML={{ __html: `
         ::-webkit-scrollbar { width: 5px; height: 5px; }
         ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: ${theme === 'classic' ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.1)'}; border-radius: 10px; }
-        ::-webkit-scrollbar-thumb:hover { background: ${theme === 'classic' ? 'rgba(0,0,0,0.2)' : 'rgba(255,255,255,0.2)'}; }
+        ::-webkit-scrollbar-thumb { background: ${isLightAppTheme(theme) ? 'rgba(0,0,0,0.14)' : 'rgba(255,255,255,0.16)'}; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: ${isLightAppTheme(theme) ? 'rgba(0,0,0,0.24)' : 'rgba(255,255,255,0.28)'}; }
       `}} />
     </div>
   );

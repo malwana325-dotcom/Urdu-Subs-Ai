@@ -444,8 +444,54 @@ public class MainActivity extends BridgeActivity {
             }
         }
 
+        private Uri findOrCreateSubfolder(ContentResolver cr, Uri treeUri, String treeDocId, String subFolder) {
+            if (subFolder == null || subFolder.trim().isEmpty()) {
+                return DocumentsContract.buildDocumentUriUsingTree(treeUri, treeDocId);
+            }
+            String cleanSub = subFolder.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
+            if (cleanSub.isEmpty()) {
+                return DocumentsContract.buildDocumentUriUsingTree(treeUri, treeDocId);
+            }
+            Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, treeDocId);
+            String[] projection = new String[] {
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_MIME_TYPE
+            };
+            try (Cursor cursor = cr.query(childrenUri, projection, null, null, null)) {
+                if (cursor != null) {
+                    while (cursor.moveToNext()) {
+                        String name = cursor.getString(1);
+                        String mime = cursor.getString(2);
+                        if (cleanSub.equals(name) && DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
+                            String docId = cursor.getString(0);
+                            return DocumentsContract.buildDocumentUriUsingTree(treeUri, docId);
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+            Uri rootDocUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, treeDocId);
+            try {
+                Uri created = DocumentsContract.createDocument(
+                    cr,
+                    rootDocUri,
+                    DocumentsContract.Document.MIME_TYPE_DIR,
+                    cleanSub
+                );
+                if (created != null) return created;
+            } catch (Exception ignored) {
+            }
+            return rootDocUri;
+        }
+
         @JavascriptInterface
         public String writeFileToSelectedFolder(String fileName, String content, String mimeType) {
+            return writeFileToSelectedFolderInSubfolder(fileName, content, mimeType, "");
+        }
+
+        @JavascriptInterface
+        public String writeFileToSelectedFolderInSubfolder(String fileName, String content, String mimeType, String subFolder) {
             JSONObject res = new JSONObject();
             try {
                 SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
@@ -466,10 +512,12 @@ public class MainActivity extends BridgeActivity {
 
                 ContentResolver cr = getContentResolver();
                 String treeDocId = DocumentsContract.getTreeDocumentId(treeUri);
-                Uri parentDocUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, treeDocId);
+                String cleanSub = (subFolder != null) ? subFolder.replaceAll("[\\\\/:*?\"<>|]", "_").trim() : "";
+                Uri parentDocUri = findOrCreateSubfolder(cr, treeUri, treeDocId, cleanSub);
+                String parentDocId = DocumentsContract.getDocumentId(parentDocUri);
                 String safeMime = (mimeType != null && !mimeType.trim().isEmpty()) ? mimeType : "text/plain";
 
-                Uri targetUri = findExistingChildDocument(cr, treeUri, treeDocId, fileName);
+                Uri targetUri = findExistingChildDocument(cr, treeUri, parentDocId, fileName);
                 if (targetUri != null) {
                     try {
                         DocumentsContract.deleteDocument(cr, targetUri);
@@ -497,9 +545,11 @@ public class MainActivity extends BridgeActivity {
                     os.flush();
                 }
 
+                String displayFolder = cleanSub.isEmpty() ? folderName : (folderName + "/" + cleanSub);
                 res.put("success", true);
                 res.put("uri", targetUri.toString());
-                res.put("folderName", folderName);
+                res.put("folderName", displayFolder);
+                res.put("subFolder", cleanSub);
                 res.put("fileName", fileName);
                 return res.toString();
             } catch (Exception e) {

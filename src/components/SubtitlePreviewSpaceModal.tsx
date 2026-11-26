@@ -156,22 +156,22 @@ export const SubtitlePreviewSpaceModal: React.FC<SubtitlePreviewSpaceModalProps>
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[115] flex items-center justify-center p-2 sm:p-4 bg-black/85 backdrop-blur-md">
+    <div className="fixed inset-0 z-[115] flex items-center justify-center p-2 sm:p-4 bg-black/68 backdrop-touch-lock">
       <div
         className={cn(
-          'border rounded-xl shadow-2xl flex flex-col overflow-hidden text-xs w-full',
+          'border rounded-xl shadow-2xl flex flex-col overflow-hidden text-xs w-full anim-pop-in mc-popup mc-role-style',
           isFullScreen ? 'fixed inset-0 h-[100dvh] w-screen rounded-none z-[120]' : 'max-w-[calc(100vw-16px)] sm:max-w-5xl h-[calc(100dvh-20px)] max-h-[880px]'
         )}
         style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)', color: 'var(--theme-text)' }}
       >
         {/* Header */}
         <div
-          className="px-3.5 py-2.5 border-b flex items-center justify-between gap-2 shrink-0"
+          className="px-3.5 py-2.5 border-b flex items-center justify-between gap-2 shrink-0 mc-popup-header"
           style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
         >
           <div className="flex items-center gap-2 min-w-0">
-            <Film size={15} style={{ color: 'var(--theme-accent)' }} />
-            <h2 className="font-semibold text-sm truncate">Preview Studio</h2>
+            <Film size={15} style={{ color: 'var(--theme-accent)' }} className="mc-popup-title" />
+            <h2 className="font-semibold text-sm truncate mc-popup-title">Preview Studio</h2>
             <InfoPopover
               title="Subtitle Playback Studio"
               description="Simulate subtitle playback in real time across Player, Timeline Tape, and raw Code views for all streams."

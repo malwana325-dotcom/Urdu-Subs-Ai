@@ -145,7 +145,7 @@ export const StylingTabView: React.FC<StylingTabViewProps> = ({
 
       {/* Gradient Studio & Watermark */}
       <div
-        className="rounded-xl border space-y-2.5 theme-card"
+        className="rounded-xl border space-y-2.5 theme-card mc-card-2"
         style={{
           backgroundColor: 'var(--theme-surface)',
           borderColor: 'var(--theme-border)',
@@ -154,8 +154,8 @@ export const StylingTabView: React.FC<StylingTabViewProps> = ({
       >
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <div className="flex items-center gap-2 min-w-0">
-            <Palette size={15} style={{ color: 'var(--theme-accent)' }} />
-            <h2 className="text-xs sm:text-sm font-semibold truncate">Styling Studio</h2>
+            <Palette size={15} style={{ color: 'var(--theme-accent)' }} className="mc-card-icon" />
+            <h2 className="text-xs sm:text-sm font-semibold truncate mc-card-title">Styling Studio</h2>
             <InfoPopover
               title="Subtitle Styling Studio"
               description="Swipe left from the right edge or tap Gradient to open the Gradient Studio drawer. Preview live in the 16:9 simulator above."
@@ -218,7 +218,7 @@ export const StylingTabView: React.FC<StylingTabViewProps> = ({
 
       {/* Text Scale */}
       <div
-        className="rounded-xl border space-y-2.5 theme-card"
+        className="rounded-xl border space-y-2.5 theme-card mc-card-3"
         style={{
           backgroundColor: 'var(--theme-surface)',
           borderColor: 'var(--theme-border)',
@@ -227,8 +227,8 @@ export const StylingTabView: React.FC<StylingTabViewProps> = ({
       >
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <div className="flex items-center gap-1.5">
-            <Type size={14} style={{ color: 'var(--theme-accent)' }} />
-            <h3 className="text-xs sm:text-sm font-semibold">Text Scale</h3>
+            <Type size={14} style={{ color: 'var(--theme-accent)' }} className="mc-card-icon" />
+            <h3 className="text-xs sm:text-sm font-semibold mc-card-title">Text Scale</h3>
             <InfoPopover
               title="Uniform Stream Scale"
               description="All streams default to 16px (10px–48px range)."
@@ -329,7 +329,7 @@ export const StylingTabView: React.FC<StylingTabViewProps> = ({
 
       {/* Typeface Picker */}
       <div
-        className="rounded-xl border space-y-2.5 theme-card"
+        className="rounded-xl border space-y-2.5 theme-card mc-card-4"
         style={{
           backgroundColor: 'var(--theme-surface)',
           borderColor: 'var(--theme-border)',
@@ -338,7 +338,7 @@ export const StylingTabView: React.FC<StylingTabViewProps> = ({
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-1.5">
-            <h3 className="text-xs sm:text-sm font-semibold">Fonts</h3>
+            <h3 className="text-xs sm:text-sm font-semibold mc-card-title">Fonts</h3>
             <InfoPopover
               title="Stream Fonts"
               description="Choose fonts per stream or globally across all streams."
@@ -455,13 +455,13 @@ export const StylingTabView: React.FC<StylingTabViewProps> = ({
 
       {/* Slim Pinned Apply Bar */}
       <div
-        className="sticky bottom-[60px] lg:bottom-3 z-20 rounded-xl border px-3 py-2 shadow-lg flex items-center justify-between gap-2"
+        className="sticky bottom-[60px] lg:bottom-3 z-20 rounded-xl border px-3 py-2 shadow-lg flex items-center justify-between gap-2 mc-footer"
         style={{
           backgroundColor: 'var(--theme-surface)',
           borderColor: 'var(--theme-border)',
         }}
       >
-        <span className="text-xs font-mono tabular-nums opacity-75 truncate">
+        <span className="text-xs font-mono tabular-nums opacity-85 truncate mc-footer-title">
           {subtitlesCount} lines
         </span>
         <button

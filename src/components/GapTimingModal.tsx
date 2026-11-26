@@ -157,18 +157,18 @@ export const GapTimingModal: React.FC<GapTimingModalProps> = ({
   });
 
   return (
-    <div className="fixed inset-0 z-[130] flex items-center justify-center p-2.5 sm:p-4 bg-black/75 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[130] flex items-center justify-center p-2.5 sm:p-4 bg-black/58 backdrop-touch-lock">
       <div
-        className="border rounded-xl shadow-2xl max-w-[calc(100vw-20px)] sm:max-w-3xl w-full max-h-[calc(100dvh-20px)] flex flex-col overflow-hidden text-xs"
+        className="border rounded-xl shadow-2xl max-w-[calc(100vw-20px)] sm:max-w-3xl w-full max-h-[calc(100dvh-20px)] flex flex-col overflow-hidden text-xs anim-pop-in mc-popup mc-role-timing"
         style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)', color: 'var(--theme-text)' }}
       >
         <div
-          className="px-3.5 py-2.5 border-b flex items-center justify-between gap-2 shrink-0"
+          className="px-3.5 py-2.5 border-b flex items-center justify-between gap-2 shrink-0 mc-popup-header"
           style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
         >
           <div className="flex items-center gap-2 min-w-0">
-            <FoldHorizontal size={15} style={{ color: 'var(--theme-accent)' }} />
-            <h3 className="font-semibold text-sm truncate">Gap Timing</h3>
+            <FoldHorizontal size={15} style={{ color: 'var(--theme-accent)' }} className="mc-popup-title" />
+            <h3 className="font-semibold text-sm truncate mc-popup-title">Gap Timing</h3>
             <InfoPopover
               title="Non-Destructive Gap Timing"
               description="Adjusts only block end times so dialogue start times remain locked. Includes seamless 0ms snap, custom range, and live inspector."
@@ -550,7 +550,7 @@ export const GapTimingModal: React.FC<GapTimingModalProps> = ({
         </div>
 
         <div
-          className="px-3.5 py-2.5 border-t flex items-center justify-between gap-2 shrink-0"
+          className="px-3.5 py-2.5 border-t flex items-center justify-between gap-2 shrink-0 mc-popup-footer"
           style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
         >
           <button

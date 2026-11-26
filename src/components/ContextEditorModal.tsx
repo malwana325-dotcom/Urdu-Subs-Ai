@@ -36,9 +36,9 @@ export const ContextEditorModal: React.FC<ContextEditorModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-[120] flex items-center justify-center p-3 bg-black/75 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[120] flex items-center justify-center p-3 bg-black/58 backdrop-touch-lock">
       <div
-        className="border rounded-xl shadow-2xl max-w-[calc(100vw-24px)] sm:max-w-2xl w-full max-h-[calc(100dvh-24px)] overflow-hidden flex flex-col text-xs"
+        className="border rounded-xl shadow-2xl max-w-[calc(100vw-24px)] sm:max-w-2xl w-full max-h-[calc(100dvh-24px)] overflow-hidden flex flex-col text-xs anim-pop-in"
         style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)', color: 'var(--theme-text)' }}
       >
         <div

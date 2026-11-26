@@ -47,18 +47,18 @@ export const TimeShiftModal: React.FC<TimeShiftModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-[120] flex items-center justify-center p-3 bg-black/75 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[120] flex items-center justify-center p-3 bg-black/58 backdrop-touch-lock">
       <div
-        className="border rounded-xl shadow-2xl max-w-[calc(100vw-24px)] sm:max-w-md w-full max-h-[calc(100dvh-24px)] overflow-hidden flex flex-col text-xs"
+        className="border rounded-xl shadow-2xl max-w-[calc(100vw-24px)] sm:max-w-md w-full max-h-[calc(100dvh-24px)] overflow-hidden flex flex-col text-xs anim-pop-in mc-popup mc-role-timing"
         style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)', color: 'var(--theme-text)' }}
       >
         <div
-          className="px-3.5 py-2.5 border-b flex items-center justify-between gap-2"
+          className="px-3.5 py-2.5 border-b flex items-center justify-between gap-2 mc-popup-header"
           style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
         >
           <div className="flex items-center gap-2">
-            <Clock size={15} style={{ color: 'var(--theme-accent)' }} />
-            <h3 className="font-semibold text-sm">Time Shift</h3>
+            <Clock size={15} style={{ color: 'var(--theme-accent)' }} className="mc-popup-title" />
+            <h3 className="font-semibold text-sm mc-popup-title">Time Shift</h3>
             <InfoPopover
               title="Subtitle Time Shift"
               description="Shift subtitle timestamps forward (+) or backward (-) by milliseconds for all blocks or selected rows."
@@ -167,7 +167,7 @@ export const TimeShiftModal: React.FC<TimeShiftModalProps> = ({
         </div>
 
         <div
-          className="px-3.5 py-2.5 border-t flex items-center justify-end gap-2"
+          className="px-3.5 py-2.5 border-t flex items-center justify-end gap-2 mc-popup-footer"
           style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
         >
           <button

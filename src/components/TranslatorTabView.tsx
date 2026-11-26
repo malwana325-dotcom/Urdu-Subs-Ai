@@ -22,12 +22,15 @@ import {
   Eye,
   Gauge,
   Square,
+  Film,
 } from 'lucide-react';
 import { GeminiQuotaDashboard } from './GeminiQuotaDashboard';
 import { InfoPopover } from './InfoPopover';
 import { FormattedRichText } from './FormattedRichText';
+import { AppliedTagsDropdown } from './AppliedTagsDropdown';
 import { GlossaryEntry } from '../services/appPreferences';
 import { registerBackHandler } from '../utils/backNavigation';
+import { buildAppliedTranslationTagInfo } from '../utils/exportCategorizer';
 import {
   TranslationSettings,
   TARGET_LANGUAGES,
@@ -75,6 +78,10 @@ interface TranslatorTabViewProps {
   onOpenTranslationSettings: () => void;
   onOpenAiConfig: () => void;
   onOpenGoogleConfig: () => void;
+  onOpenTranslatorDrawer?: () => void;
+  activeModelLabel?: string;
+  googleRoutingMode?: string;
+  onOpenMediaLookup?: () => void;
   onAnalyzeSubtitles: () => void;
   onChangeContext: (val: string) => void;
   onChangeCustomPrompt: (val: string) => void;
@@ -116,6 +123,10 @@ export const TranslatorTabView: React.FC<TranslatorTabViewProps> = ({
   onOpenTranslationSettings,
   onOpenAiConfig,
   onOpenGoogleConfig,
+  onOpenTranslatorDrawer,
+  activeModelLabel,
+  googleRoutingMode,
+  onOpenMediaLookup,
   onAnalyzeSubtitles,
   onChangeContext,
   onChangeCustomPrompt,
@@ -190,11 +201,43 @@ export const TranslatorTabView: React.FC<TranslatorTabViewProps> = ({
   }>;
   const activeWorkersCount = workerEntries.filter((w) => w.status === 'working').length;
 
+  const activeDropdownStream: 'ai' | 'google' =
+    googleCount > 0 && translatedCount === 0 && isGoogleTranslatingAll
+      ? 'google'
+      : googleCount > 0 && translatedCount === 0
+      ? 'google'
+      : 'ai';
+
+  const appliedTagInfo = React.useMemo(
+    () =>
+      buildAppliedTranslationTagInfo({
+        streamType: activeDropdownStream,
+        translationSettings,
+        selectedModelName: activeModelLabel || selectedModel,
+        aiWorkers: geminiWorkers,
+        aiBatchSize: geminiBatchSize,
+        googleWorkers,
+        googleBatchSize,
+        googleRoutingMode,
+      }),
+    [
+      activeDropdownStream,
+      translationSettings,
+      activeModelLabel,
+      selectedModel,
+      geminiWorkers,
+      geminiBatchSize,
+      googleWorkers,
+      googleBatchSize,
+      googleRoutingMode,
+    ]
+  );
+
   return (
     <div className="space-y-3 max-w-5xl mx-auto w-full pb-36">
       {/* Primary Translation Status & Engine Links (Primary action buttons stacked bottom-right) */}
       <div
-        className="rounded-xl border space-y-2.5 theme-card"
+        className="rounded-xl border space-y-2.5 theme-card mc-card-1"
         style={{
           backgroundColor: 'var(--theme-surface)',
           borderColor: 'var(--theme-border)',
@@ -203,8 +246,8 @@ export const TranslatorTabView: React.FC<TranslatorTabViewProps> = ({
       >
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <div className="flex items-center gap-2 min-w-0">
-            <Sparkles size={16} style={{ color: 'var(--theme-accent)' }} className="shrink-0" />
-            <h2 className="text-xs sm:text-sm font-semibold truncate">Translation Engines</h2>
+            <Sparkles size={16} style={{ color: 'var(--theme-accent)' }} className="shrink-0 mc-card-icon" />
+            <h2 className="text-xs sm:text-sm font-semibold truncate mc-card-title">Translation Engines</h2>
             <InfoPopover
               title="AI & Machine Engines"
               description="Run Gemini AI dubbing or Neutral machine comparison. Configure language, tone, and worker limits in Settings."
@@ -240,25 +283,41 @@ export const TranslatorTabView: React.FC<TranslatorTabViewProps> = ({
           style={{ borderColor: 'var(--theme-border)' }}
         >
           <span className="text-[11px] opacity-75 truncate">
-            {langObj?.name || 'Urdu'} · {scriptObj?.badge || 'اردو'} · {toneObj?.label} · {honorificObj?.label}
+            {activeModelLabel || selectedModel} · {langObj?.name || 'Urdu'} · {scriptObj?.badge || 'اردو'} · {toneObj?.label} · {honorificObj?.label}
           </span>
 
           <div className="flex items-center gap-1.5 flex-wrap">
+            {onOpenTranslatorDrawer && (
+              <button
+                type="button"
+                onClick={onOpenTranslatorDrawer}
+                className="min-h-[36px] px-2.5 rounded-lg border text-[11px] font-semibold flex items-center gap-1 cursor-pointer touch-tactile btn-inch-cap"
+                style={{
+                  backgroundColor: 'var(--theme-accent-soft)',
+                  borderColor: 'var(--theme-accent)',
+                  color: 'var(--theme-accent-text)',
+                }}
+                title="Open right-side Translation & AI Models Drawer (or swipe left)"
+              >
+                <Sliders size={12} className="shrink-0" />
+                <span className="truncate">Studio Drawer</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={onOpenTranslationSettings}
-              className="min-h-[34px] px-2.5 rounded-lg border text-[11px] font-semibold flex items-center gap-1 cursor-pointer touch-tactile btn-inch-cap"
+              className="min-h-[36px] px-2.5 rounded-lg border text-[11px] font-semibold flex items-center gap-1 cursor-pointer touch-tactile btn-inch-cap"
               style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
             >
-              <Sliders size={12} style={{ color: 'var(--theme-accent)' }} className="shrink-0" />
-              <span className="truncate">Language</span>
+              <Languages size={12} style={{ color: 'var(--theme-accent)' }} className="shrink-0" />
+              <span className="truncate">Rules</span>
             </button>
             <button
               type="button"
               onClick={onOpenAiConfig}
-              className="min-h-[34px] px-2.5 rounded-lg border text-[11px] font-semibold flex items-center gap-1 cursor-pointer touch-tactile btn-inch-cap"
+              className="min-h-[36px] px-2.5 rounded-lg border text-[11px] font-semibold flex items-center gap-1 cursor-pointer touch-tactile btn-inch-cap"
               style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
-              title={`Model: ${selectedModel} (${geminiWorkers}w/${geminiBatchSize}b)`}
+              title={`Model: ${activeModelLabel || selectedModel} (${geminiWorkers}w/${geminiBatchSize}b)`}
             >
               <Cpu size={12} style={{ color: 'var(--theme-accent)' }} className="shrink-0" />
               <span className="tabular-nums truncate">AI {geminiWorkers}w</span>
@@ -266,7 +325,7 @@ export const TranslatorTabView: React.FC<TranslatorTabViewProps> = ({
             <button
               type="button"
               onClick={onOpenGoogleConfig}
-              className="min-h-[34px] px-2.5 rounded-lg border text-[11px] font-semibold flex items-center gap-1 cursor-pointer touch-tactile btn-inch-cap"
+              className="min-h-[36px] px-2.5 rounded-lg border text-[11px] font-semibold flex items-center gap-1 cursor-pointer touch-tactile btn-inch-cap"
               style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
               title={`Neutral Workers: ${googleWorkers}w/${googleBatchSize}b`}
             >
@@ -275,20 +334,23 @@ export const TranslatorTabView: React.FC<TranslatorTabViewProps> = ({
             </button>
           </div>
         </div>
+
+        {/* One-Line Visible Drop-Down of Related Tags & Applied Translation Parameters */}
+        <AppliedTagsDropdown tagInfo={appliedTagInfo} />
       </div>
 
       {/* Live Worker Monitor */}
       {isWorkerMonitorOpen && Object.keys(workerStates).length > 0 && (
         <div
-          className="rounded-xl border p-3 space-y-2 theme-card"
+          className="rounded-xl border p-3 space-y-2 theme-card mc-card-2"
           style={{
             backgroundColor: 'var(--theme-surface)',
             borderColor: 'var(--theme-border)',
           }}
         >
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold flex items-center gap-1.5">
-              <Activity size={13} style={{ color: 'var(--theme-accent)' }} />
+            <span className="text-xs font-semibold flex items-center gap-1.5 mc-card-title">
+              <Activity size={13} style={{ color: 'var(--theme-accent)' }} className="mc-card-icon" />
               <span>Workers</span>
             </span>
             <button
@@ -338,7 +400,7 @@ export const TranslatorTabView: React.FC<TranslatorTabViewProps> = ({
 
       {/* Cultural Context (entire title header row toggles expand/collapse + renders all rich text formats) */}
       <div
-        className="rounded-xl border theme-card overflow-hidden"
+        className="rounded-xl border theme-card mc-card-3 overflow-hidden"
         style={{
           backgroundColor: 'var(--theme-surface)',
           borderColor: 'var(--theme-border)',
@@ -359,14 +421,26 @@ export const TranslatorTabView: React.FC<TranslatorTabViewProps> = ({
         >
           <div className="flex items-center gap-2 min-w-0 flex-1">
             {openSections.context ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
-            <Search size={14} style={{ color: 'var(--theme-accent)' }} className="shrink-0" />
-            <span className="text-xs font-semibold truncate">Cultural Context</span>
+            <Search size={14} style={{ color: 'var(--theme-accent)' }} className="shrink-0 mc-card-icon" />
+            <span className="text-xs font-semibold truncate mc-card-title">Cultural Context</span>
           </div>
 
           <div
             className="flex items-center gap-1.5 shrink-0"
             onClick={(e) => e.stopPropagation()}
           >
+            {onOpenMediaLookup && (
+              <button
+                type="button"
+                onClick={onOpenMediaLookup}
+                className="min-h-[32px] px-2 rounded-lg border text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
+                title="Load movie or season details from Google, IMDb, or custom address"
+              >
+                <Film size={12} style={{ color: 'var(--theme-accent)' }} />
+                <span>Load</span>
+              </button>
+            )}
             {openSections.context && (
               <button
                 type="button"
@@ -451,7 +525,7 @@ export const TranslatorTabView: React.FC<TranslatorTabViewProps> = ({
 
       {/* Custom Instructions (entire title header row toggles expand/collapse + supports rich text preview) */}
       <div
-        className="rounded-xl border theme-card overflow-hidden"
+        className="rounded-xl border theme-card mc-card-4 overflow-hidden"
         style={{
           backgroundColor: 'var(--theme-surface)',
           borderColor: 'var(--theme-border)',
@@ -471,8 +545,8 @@ export const TranslatorTabView: React.FC<TranslatorTabViewProps> = ({
         >
           <div className="flex items-center gap-2 min-w-0 flex-1">
             {openSections.instructions ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
-            <MessageSquare size={14} style={{ color: 'var(--theme-accent)' }} className="shrink-0" />
-            <span className="text-xs font-semibold truncate">Instructions</span>
+            <MessageSquare size={14} style={{ color: 'var(--theme-accent)' }} className="shrink-0 mc-card-icon" />
+            <span className="text-xs font-semibold truncate mc-card-title">Instructions</span>
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
@@ -541,7 +615,7 @@ export const TranslatorTabView: React.FC<TranslatorTabViewProps> = ({
       {/* Character & Term Glossary (entire header row toggles expand/collapse) */}
       {enableTermGlossary && (
         <div
-          className="rounded-xl border theme-card overflow-hidden"
+          className="rounded-xl border theme-card mc-card-5 overflow-hidden"
           style={{
             backgroundColor: 'var(--theme-surface)',
             borderColor: 'var(--theme-border)',
@@ -561,8 +635,8 @@ export const TranslatorTabView: React.FC<TranslatorTabViewProps> = ({
           >
             <div className="flex items-center gap-2 min-w-0 flex-1">
               {openSections.glossary ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
-              <BookOpen size={14} style={{ color: 'var(--theme-accent)' }} className="shrink-0" />
-              <span className="text-xs font-semibold truncate">Glossary</span>
+              <BookOpen size={14} style={{ color: 'var(--theme-accent)' }} className="shrink-0 mc-card-icon" />
+              <span className="text-xs font-semibold truncate mc-card-title">Glossary</span>
               <span className="text-[11px] font-mono opacity-55 tabular-nums">
                 · {glossary.filter((g) => g.enabled).length}
               </span>
@@ -655,7 +729,7 @@ export const TranslatorTabView: React.FC<TranslatorTabViewProps> = ({
 
       {/* Progress Tracking Bar (Bottom of Translation Tab) */}
       <section
-        className="rounded-xl border space-y-2.5 theme-card"
+        className="rounded-xl border space-y-2.5 theme-card mc-card-2"
         style={{
           backgroundColor: 'var(--theme-surface)',
           borderColor: 'var(--theme-border)',
@@ -664,8 +738,8 @@ export const TranslatorTabView: React.FC<TranslatorTabViewProps> = ({
       >
         <div className="flex items-center justify-between gap-2 text-[11px] font-semibold">
           <div className="flex items-center gap-1.5 min-w-0">
-            <Gauge size={14} style={{ color: 'var(--theme-accent)' }} className="shrink-0" />
-            <span className="truncate">Live Progress</span>
+            <Gauge size={14} style={{ color: 'var(--theme-accent)' }} className="shrink-0 mc-card-icon" />
+            <span className="truncate mc-card-title">Live Progress</span>
             <InfoPopover
               title="Translation Progress"
               description="Live Gemini AI and Neutral progress, active workers, and ETA. Swipe left from the right edge to open the parameters drawer."
@@ -687,7 +761,7 @@ export const TranslatorTabView: React.FC<TranslatorTabViewProps> = ({
           </div>
           <div className="h-2 w-full rounded-full overflow-hidden bg-black/15 dark:bg-white/10">
             <div
-              className="h-full transition-all duration-200"
+              className="h-full transition-[width] duration-200"
               style={{ width: `${aiPercent}%`, backgroundColor: 'var(--theme-accent)' }}
             />
           </div>
@@ -702,7 +776,7 @@ export const TranslatorTabView: React.FC<TranslatorTabViewProps> = ({
           </div>
           <div className="h-1.5 w-full rounded-full overflow-hidden bg-black/15 dark:bg-white/10">
             <div
-              className="h-full transition-all duration-200 bg-sky-400"
+              className="h-full transition-[width] duration-200 bg-sky-400"
               style={{ width: `${googlePercent}%` }}
             />
           </div>

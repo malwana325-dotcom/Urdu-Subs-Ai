@@ -57,18 +57,18 @@ export const UnifiedDownloadModal: React.FC<UnifiedDownloadModalProps> = ({
   ];
 
   return (
-    <div className="fixed inset-0 z-[120] flex items-center justify-center p-2.5 sm:p-4 bg-black/75 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[120] flex items-center justify-center p-2.5 sm:p-4 bg-black/58 backdrop-touch-lock">
       <div
-        className="border rounded-xl shadow-2xl max-w-[calc(100vw-20px)] sm:max-w-xl w-full max-h-[calc(100dvh-20px)] overflow-hidden text-xs flex flex-col"
+        className="border rounded-xl shadow-2xl max-w-[calc(100vw-20px)] sm:max-w-xl w-full max-h-[calc(100dvh-20px)] overflow-hidden text-xs flex flex-col anim-pop-in mc-popup mc-role-export"
         style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)', color: 'var(--theme-text)' }}
       >
         <div
-          className="px-3.5 py-2.5 border-b flex items-center justify-between shrink-0"
+          className="px-3.5 py-2.5 border-b flex items-center justify-between shrink-0 mc-popup-header"
           style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
         >
           <div className="flex items-center gap-2">
-            <Download size={15} style={{ color: 'var(--theme-accent)' }} />
-            <h2 className="font-semibold text-sm">Export Subtitles</h2>
+            <Download size={15} style={{ color: 'var(--theme-accent)' }} className="mc-popup-title" />
+            <h2 className="font-semibold text-sm mc-popup-title">Export Subtitles</h2>
             <InfoPopover
               title="Export Subtitles"
               description="Choose AI, Google, or Original stream and export as stylized .ass/.ssa/.srt or clean .vtt/.sbv/.lrc/.txt/.json with UTF-8 BOM."
@@ -129,7 +129,7 @@ export const UnifiedDownloadModal: React.FC<UnifiedDownloadModalProps> = ({
         </div>
 
         <div
-          className="px-3.5 py-2.5 border-t flex items-center justify-end shrink-0"
+          className="px-3.5 py-2.5 border-t flex items-center justify-end shrink-0 mc-popup-footer"
           style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
         >
           <button

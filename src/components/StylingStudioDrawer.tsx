@@ -1013,7 +1013,7 @@ export const StylingStudioDrawer: React.FC<StylingStudioDrawerProps> = ({
     const expanded = openMenus[id];
     return (
       <div
-        className="rounded-xl border overflow-hidden"
+        className="rounded-xl border overflow-hidden mc-dropdown-alt"
         style={{
           backgroundColor: 'var(--theme-elevated)',
           borderColor: expanded ? 'var(--theme-accent)' : 'var(--theme-border)',
@@ -1026,9 +1026,9 @@ export const StylingStudioDrawer: React.FC<StylingStudioDrawerProps> = ({
           className="w-full min-h-[42px] px-3 py-2 flex items-center justify-between gap-2 text-left cursor-pointer hover:opacity-95"
         >
           <div className="flex items-center gap-2 min-w-0">
-            <Icon size={14} style={{ color: 'var(--theme-accent)' }} className="shrink-0" />
+            <Icon size={14} style={{ color: 'var(--theme-accent)' }} className="shrink-0 mc-dropdown-alt-title" />
             <div className="min-w-0">
-              <div className="text-[11px] font-semibold truncate">{title}</div>
+              <div className="text-[11px] font-semibold truncate mc-dropdown-alt-title">{title}</div>
               {summary && <div className="text-[9.5px] opacity-60 truncate">{summary}</div>}
             </div>
           </div>
@@ -1056,15 +1056,15 @@ export const StylingStudioDrawer: React.FC<StylingStudioDrawerProps> = ({
 
   return (
     <>
-      <RightEdgeDrawerShell isOpen={isOpen} onClose={onClose} widthClass="w-[min(94vw,430px)]">
+      <RightEdgeDrawerShell isOpen={isOpen} onClose={onClose} widthClass="w-[min(94vw,430px)]" roleVariant="style">
         {/* Drawer Header */}
         <div
-          className="px-3.5 py-2.5 border-b flex items-center justify-between gap-2 shrink-0"
+          className="px-3.5 py-2.5 border-b flex items-center justify-between gap-2 shrink-0 mc-popup-header"
           style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
         >
           <div className="flex items-center gap-2 min-w-0">
-            <Palette size={15} style={{ color: 'var(--theme-accent)' }} />
-            <h2 className="font-semibold text-sm truncate">Gradient Studio</h2>
+            <Palette size={15} style={{ color: 'var(--theme-accent)' }} className="mc-popup-title" />
+            <h2 className="font-semibold text-sm truncate mc-popup-title">Gradient Studio</h2>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
             <button
@@ -1709,7 +1709,7 @@ export const StylingStudioDrawer: React.FC<StylingStudioDrawerProps> = ({
 
         {/* Drawer Footer */}
         <div
-          className="relative px-3 py-2.5 border-t flex items-center justify-between gap-2 shrink-0"
+          className="relative px-3 py-2.5 border-t flex items-center justify-between gap-2 shrink-0 mc-popup-footer"
           style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
         >
           <div className="flex items-center gap-1.5">
@@ -1739,7 +1739,7 @@ export const StylingStudioDrawer: React.FC<StylingStudioDrawerProps> = ({
                 <>
                   <div className="fixed inset-0 z-[140]" onClick={() => setIsExportMenuOpen(false)} />
                   <div
-                    className="absolute bottom-11 left-0 w-52 border rounded-xl shadow-2xl p-1.5 z-[150] space-y-1 max-h-[55dvh] overflow-y-auto"
+                    className="absolute bottom-11 left-0 w-52 border rounded-xl shadow-2xl p-1.5 z-[150] space-y-1 max-h-[55dvh] overflow-y-auto mc-dropdown-alt"
                     style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
                   >
                     {[
@@ -1794,15 +1794,15 @@ export const StylingStudioDrawer: React.FC<StylingStudioDrawerProps> = ({
 
       {/* SAVE TO GRADIENT LIBRARY MODAL */}
       {isSaveModalOpen && (
-        <div className="fixed inset-0 z-[160] bg-black/70 backdrop-blur-xs flex items-center justify-center p-3">
+        <div className="fixed inset-0 z-[160] bg-black/58 backdrop-touch-lock flex items-center justify-center p-3">
           <div
-            className="w-full max-w-[calc(100vw-24px)] sm:max-w-md border rounded-xl p-4 shadow-2xl space-y-3"
+            className="w-full max-w-[calc(100vw-24px)] sm:max-w-md border rounded-xl p-4 shadow-2xl space-y-3 anim-pop-in mc-popup mc-role-style"
             style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)', color: 'var(--theme-text)' }}
           >
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <BookmarkPlus size={15} style={{ color: 'var(--theme-accent)' }} />
-                <h3 className="font-semibold text-sm">Save Palette</h3>
+                <BookmarkPlus size={15} style={{ color: 'var(--theme-accent)' }} className="mc-popup-title" />
+                <h3 className="font-semibold text-sm mc-popup-title">Save Palette</h3>
               </div>
               <button type="button" onClick={() => setIsSaveModalOpen(false)} className="p-1 rounded-lg opacity-60 hover:opacity-100 cursor-pointer">
                 <X size={15} />

@@ -109,7 +109,7 @@ export const FontsPopupModal: React.FC<FontsPopupModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-[150] bg-black/55 backdrop-blur-[2px] flex items-center justify-center p-3 backdrop-touch-lock"
+      className="fixed inset-0 z-[150] bg-black/58 flex items-center justify-center p-3 backdrop-touch-lock"
       onClick={(e) => {
         e.stopPropagation();
         onClose();
@@ -119,7 +119,7 @@ export const FontsPopupModal: React.FC<FontsPopupModalProps> = ({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="border rounded-xl shadow-2xl w-full max-w-[min(450px,calc(100vw-24px))] max-h-[calc(100dvh-24px)] flex flex-col overflow-hidden text-xs overscroll-contain"
+        className="border rounded-xl shadow-2xl w-full max-w-[min(450px,calc(100vw-24px))] max-h-[calc(100dvh-24px)] flex flex-col overflow-hidden text-xs overscroll-contain mc-popup mc-role-style anim-pop-in"
         style={{
           backgroundColor: 'var(--theme-surface)',
           borderColor: 'var(--theme-border)',
@@ -128,12 +128,12 @@ export const FontsPopupModal: React.FC<FontsPopupModalProps> = ({
       >
         {/* Header */}
         <div
-          className="px-3.5 py-2.5 border-b flex items-center justify-between gap-2 shrink-0"
+          className="px-3.5 py-2.5 border-b flex items-center justify-between gap-2 shrink-0 mc-popup-header"
           style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
         >
           <div className="flex items-center gap-2 min-w-0">
-            <Languages size={15} style={{ color: 'var(--theme-accent)' }} className="shrink-0" />
-            <h3 className="font-semibold text-xs truncate">Fonts</h3>
+            <Languages size={15} style={{ color: 'var(--theme-accent)' }} className="shrink-0 mc-popup-title" />
+            <h3 className="font-semibold text-xs truncate mc-popup-title">Fonts</h3>
             {isDirty && <span className="text-[10px] font-semibold text-amber-500">· Draft</span>}
             <InfoPopover
               title="Stream Typeface Picker"
@@ -367,7 +367,7 @@ export const FontsPopupModal: React.FC<FontsPopupModalProps> = ({
 
         {/* Footer */}
         <div
-          className="px-3.5 py-2.5 border-t flex items-center justify-between gap-2 shrink-0"
+          className="px-3.5 py-2.5 border-t flex items-center justify-between gap-2 shrink-0 mc-popup-footer"
           style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
         >
           <button

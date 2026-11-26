@@ -101,13 +101,13 @@ export const InfoPopover: React.FC<InfoPopoverProps> = ({
               borderColor: 'var(--theme-border)',
               color: 'var(--theme-text)',
             }}
-            className="p-2.5 rounded-xl border shadow-xl text-left text-xs z-[150] overflow-y-auto mobile-fixed-chrome overscroll-contain"
+            className="p-2.5 rounded-xl border shadow-xl text-left text-xs z-[150] overflow-y-auto mobile-fixed-chrome overscroll-contain mc-popup mc-role-info"
           >
           <div
-            className="flex items-center justify-between pb-1.5 border-b mb-1.5"
+            className="flex items-center justify-between pb-1.5 border-b mb-1.5 px-1.5 pt-1 -mx-1 -mt-1 rounded-t-lg mc-popup-header"
             style={{ borderColor: 'var(--theme-border)' }}
           >
-            <span className="font-semibold text-[11px] truncate pr-2">{title}</span>
+            <span className="font-semibold text-[11px] truncate pr-2 mc-popup-title">{title}</span>
             <button
               type="button"
               onClick={() => setIsOpen(false)}

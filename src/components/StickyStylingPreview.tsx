@@ -158,7 +158,7 @@ export const StickyStylingPreview: React.FC<StickyStylingPreviewProps> = ({
 
   return (
     <div
-      className="sticky top-[46px] lg:top-[84px] z-30 rounded-xl border overflow-hidden theme-card"
+      className="sticky top-[46px] lg:top-[84px] z-30 rounded-xl border overflow-hidden theme-card mc-card-1"
       style={{
         backgroundColor: 'var(--theme-surface)',
         borderColor: 'var(--theme-border)',
@@ -173,8 +173,8 @@ export const StickyStylingPreview: React.FC<StickyStylingPreviewProps> = ({
         }}
       >
         <div className="flex items-center gap-1.5 min-w-0">
-          <Film size={13} style={{ color: 'var(--theme-accent)' }} className="shrink-0" />
-          <span className="text-[11px] font-semibold truncate">Preview</span>
+          <Film size={13} style={{ color: 'var(--theme-accent)' }} className="shrink-0 mc-card-icon" />
+          <span className="text-[11px] font-semibold truncate mc-card-title">Preview</span>
           <InfoPopover
             title="Live Cinema Preview"
             description="Pinned 16:9 simulator rendering active fonts, sizes, gradients, outlines, and shadows."

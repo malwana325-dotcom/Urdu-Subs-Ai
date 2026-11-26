@@ -94,18 +94,18 @@ export const GoogleTranslateSettingsModal: React.FC<GoogleTranslateSettingsModal
   };
 
   return (
-    <div className="fixed inset-0 z-[115] flex items-center justify-center p-3 bg-black/75 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[115] flex items-center justify-center p-3 bg-black/58 backdrop-touch-lock">
       <div
-        className="border rounded-xl shadow-2xl max-w-[calc(100vw-24px)] sm:max-w-lg w-full max-h-[calc(100dvh-24px)] overflow-hidden text-xs flex flex-col"
+        className="border rounded-xl shadow-2xl max-w-[calc(100vw-24px)] sm:max-w-lg w-full max-h-[calc(100dvh-24px)] overflow-hidden text-xs flex flex-col anim-pop-in mc-popup mc-role-info"
         style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)', color: 'var(--theme-text)' }}
       >
         <div
-          className="px-3.5 py-2.5 border-b flex items-center justify-between shrink-0"
+          className="px-3.5 py-2.5 border-b flex items-center justify-between shrink-0 mc-popup-header"
           style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
         >
           <div className="flex items-center gap-2">
-            <Globe size={15} style={{ color: 'var(--theme-accent)' }} />
-            <h2 className="font-semibold text-sm">Google Translate</h2>
+            <Globe size={15} style={{ color: 'var(--theme-accent)' }} className="mc-popup-title" />
+            <h2 className="font-semibold text-sm mc-popup-title">Google Translate</h2>
             <InfoPopover
               title="Google Translate Settings"
               description="Configure source/target pair, optional Google Cloud Translation key, worker threads, and batch size."
@@ -225,7 +225,7 @@ export const GoogleTranslateSettingsModal: React.FC<GoogleTranslateSettingsModal
         </div>
 
         <div
-          className="px-3.5 py-2.5 border-t flex items-center justify-end gap-2 shrink-0"
+          className="px-3.5 py-2.5 border-t flex items-center justify-end gap-2 shrink-0 mc-popup-footer"
           style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
         >
           <button

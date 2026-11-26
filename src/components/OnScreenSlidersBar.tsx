@@ -32,7 +32,7 @@ export const OnScreenSlidersBar: React.FC<OnScreenSlidersBarProps> = ({
 
   return (
     <div
-      className="fixed bottom-[64px] lg:bottom-4 right-3 left-3 sm:left-auto sm:w-[340px] max-w-[calc(100vw-24px)] z-[130] rounded-xl border shadow-xl p-2.5 space-y-2.5 mobile-fixed-chrome"
+      className="fixed bottom-[64px] lg:bottom-4 right-3 left-3 sm:left-auto sm:w-[340px] max-w-[calc(100vw-24px)] z-[130] rounded-xl border shadow-xl p-2.5 space-y-2.5 mobile-fixed-chrome mc-popup mc-role-style"
       style={{
         backgroundColor: 'var(--theme-surface)',
         borderColor: 'var(--theme-border)',

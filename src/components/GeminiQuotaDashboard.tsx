@@ -118,7 +118,7 @@ export const GeminiQuotaDashboard: React.FC<GeminiQuotaDashboardProps> = ({
 
   return (
     <div
-      className="rounded-xl border overflow-hidden text-xs"
+      className="rounded-xl border overflow-hidden text-xs theme-card mc-card-2"
       style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)', color: 'var(--theme-text)' }}
     >
       {/* Header (touch anywhere on header row to expand/collapse) */}
@@ -136,8 +136,8 @@ export const GeminiQuotaDashboard: React.FC<GeminiQuotaDashboardProps> = ({
         style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
       >
         <div className="flex items-center gap-2 min-w-0">
-          <Gauge size={14} style={{ color: 'var(--theme-accent)' }} />
-          <span className="font-semibold truncate">Quota & Rate</span>
+          <Gauge size={14} style={{ color: 'var(--theme-accent)' }} className="mc-card-icon" />
+          <span className="font-semibold truncate mc-card-title">Quota & Rate</span>
           <span className="text-[10px] font-mono opacity-65 tabular-nums truncate">
             {stats.tier.rpmLimit} RPM
           </span>

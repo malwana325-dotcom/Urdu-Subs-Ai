@@ -68,14 +68,14 @@ export const MobileToolsSheet: React.FC<MobileToolsSheetProps> = ({
   return (
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-[130] flex items-end sm:items-center justify-center bg-black/55 backdrop-blur-xs">
+        <div className="fixed inset-0 z-[130] flex items-end sm:items-center justify-center bg-black/48 backdrop-touch-lock">
           <div className="absolute inset-0" onClick={onClose} />
           <motion.div
             initial={{ y: '100%', opacity: 0.6 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: '100%', opacity: 0.6 }}
             transition={{ type: 'spring', damping: 30, stiffness: 320 }}
-            className="relative w-full max-w-md max-h-[85dvh] overflow-y-auto rounded-t-2xl sm:rounded-2xl border shadow-xl p-3.5 pb-safe space-y-3 mobile-fixed-chrome"
+            className="relative w-full max-w-md max-h-[85dvh] overflow-y-auto rounded-t-2xl sm:rounded-2xl border shadow-xl p-3.5 pb-safe space-y-3 mobile-fixed-chrome mc-popup mc-role-edit"
             style={{
               backgroundColor: 'var(--theme-surface)',
               borderColor: 'var(--theme-border)',
@@ -85,7 +85,7 @@ export const MobileToolsSheet: React.FC<MobileToolsSheetProps> = ({
             <div className="w-8 h-1 rounded-full bg-current opacity-20 mx-auto sm:hidden" />
 
             <div className="flex items-center justify-between">
-              <h3 className="text-xs font-semibold uppercase tracking-wider opacity-80">Tools</h3>
+              <h3 className="text-xs font-semibold uppercase tracking-wider opacity-80 mc-popup-title">Tools</h3>
               <button
                 type="button"
                 onClick={onClose}

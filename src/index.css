@@ -25,17 +25,62 @@
   --card-pad: 0.75rem;
   --card-gap: 0.5rem;
 
-  /* Default: Crisp Neutral Studio (Light) with Single Studio Teal Accent */
-  --theme-canvas: #f8fafc;
-  --theme-surface: #ffffff;
-  --theme-elevated: #f1f5f9;
-  --theme-border: #e2e8f0;
-  --theme-text: #0f172a;
-  --theme-muted: #64748b;
-  --theme-accent: #0d9488;
-  --theme-accent-soft: rgba(13, 148, 136, 0.10);
-  --theme-accent-text: #0f766e;
-  --theme-header: rgba(255, 255, 255, 0.92);
+  /* Default: Vibrant Aurora / Prism fallback tokens */
+  --theme-canvas: #090b1a;
+  --theme-surface: #11152c;
+  --theme-elevated: #192042;
+  --theme-border: rgba(139, 92, 246, 0.30);
+  --theme-text: #f8fafc;
+  --theme-muted: #a5b4fc;
+  --theme-accent: #06b6d4;
+  --theme-accent-2: #8b5cf6;
+  --theme-accent-3: #ec4899;
+  --theme-accent-soft: rgba(6, 182, 212, 0.14);
+  --theme-accent-text: #22d3ee;
+  --theme-gradient: linear-gradient(135deg, #06b6d4 0%, #8b5cf6 52%, #ec4899 100%);
+  --theme-canvas-bg: radial-gradient(circle at 12% 14%, rgba(6, 182, 212, 0.22), transparent 42%), radial-gradient(circle at 86% 18%, rgba(139, 92, 246, 0.24), transparent 44%), radial-gradient(circle at 52% 88%, rgba(236, 72, 153, 0.18), transparent 46%);
+  --theme-header: rgba(11, 14, 34, 0.90);
+  --theme-header-border: rgba(34, 211, 238, 0.42);
+  --theme-header-title: #38bdf8;
+  --theme-footer: rgba(17, 13, 38, 0.92);
+  --theme-footer-border: rgba(192, 132, 252, 0.42);
+  --theme-footer-title: #e879f9;
+  --theme-dropdown-bg: rgba(15, 22, 48, 0.97);
+  --theme-dropdown-border: rgba(56, 189, 248, 0.48);
+  --theme-dropdown-title: #22d3ee;
+  --theme-dropdown-2-border: rgba(52, 211, 153, 0.48);
+  --theme-dropdown-2-title: #34d399;
+  --theme-popup-bg: rgba(16, 18, 42, 0.98);
+  --theme-popup-header: rgba(30, 27, 68, 0.92);
+  --theme-popup-footer: rgba(15, 19, 44, 0.96);
+  --theme-popup-border: rgba(244, 114, 182, 0.48);
+  --theme-popup-title: #f472b6;
+  --theme-card-1-bg: rgba(15, 24, 52, 0.92);
+  --theme-card-1-border: rgba(34, 211, 238, 0.38);
+  --theme-card-1-title: #38bdf8;
+  --theme-card-1-icon: #22d3ee;
+  --theme-card-2-bg: rgba(24, 18, 52, 0.92);
+  --theme-card-2-border: rgba(167, 139, 250, 0.38);
+  --theme-card-2-title: #c084fc;
+  --theme-card-2-icon: #a78bfa;
+  --theme-card-3-bg: rgba(28, 22, 44, 0.92);
+  --theme-card-3-border: rgba(251, 191, 36, 0.38);
+  --theme-card-3-title: #fbbf24;
+  --theme-card-3-icon: #f59e0b;
+  --theme-card-4-bg: rgba(31, 17, 42, 0.92);
+  --theme-card-4-border: rgba(251, 113, 133, 0.38);
+  --theme-card-4-title: #fb7185;
+  --theme-card-4-icon: #f43f5e;
+  --theme-card-5-bg: rgba(14, 28, 42, 0.92);
+  --theme-card-5-border: rgba(52, 211, 153, 0.38);
+  --theme-card-5-title: #34d399;
+  --theme-card-5-icon: #10b981;
+  --tab-home-color: #22d3ee;
+  --tab-translator-color: #e879f9;
+  --tab-workspace-color: #fbbf24;
+  --tab-styling-color: #fb7185;
+  --tab-download-color: #34d399;
+  --tab-menu-color: #818cf8;
 }
 
 html {
@@ -54,6 +99,24 @@ body,
   min-height: 100%;
   -webkit-overflow-scrolling: touch;
   -webkit-tap-highlight-color: transparent;
+}
+
+/* Prevent accidental long-press text selection popups on UI chrome while keeping inputs & subtitle dialogue selectable */
+.theme-root {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.theme-root input,
+.theme-root textarea,
+.theme-root select,
+.theme-root [contenteditable="true"],
+.theme-root .selectable-text,
+.theme-root .ws-2line-clamp {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
 }
 
 /* Keep fixed/sticky chrome compact regardless of zoom level on mobile */
@@ -88,13 +151,13 @@ body,
   }
 
   .touch-tactile {
-    transition: transform 150ms cubic-bezier(0.2, 0, 0, 1),
-      opacity 150ms cubic-bezier(0.2, 0, 0, 1),
-      background-color 150ms cubic-bezier(0.2, 0, 0, 1),
-      border-color 150ms cubic-bezier(0.2, 0, 0, 1);
+    transition: transform 140ms cubic-bezier(0.16, 1, 0.3, 1),
+      opacity 140ms cubic-bezier(0.16, 1, 0.3, 1),
+      background-color 140ms cubic-bezier(0.16, 1, 0.3, 1),
+      border-color 140ms cubic-bezier(0.16, 1, 0.3, 1);
   }
   .touch-tactile:active:not(:disabled) {
-    transform: scale(0.98);
+    transform: scale(0.97);
   }
 
   /* Cap oversized horizontal action buttons to 1 inch (96px) */
@@ -134,10 +197,93 @@ body,
     height: 100dvh;
   }
 
-  /* Hardware-accelerated off-screen skip for fast Android scrolling */
+  /* Hardware-accelerated off-screen skip + layout isolation for silky-smooth scrolling */
   .perf-row {
     content-visibility: auto;
-    contain-intrinsic-size: auto 120px;
+    contain-intrinsic-size: auto 116px;
+    contain: layout style;
+  }
+
+  .perf-tr-row {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 76px;
+    contain: layout style;
+  }
+
+  /* Smooth GPU-composited micro-animations (transform + opacity only) */
+  .anim-pop-in {
+    animation: uiPopSpringIn 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    will-change: transform, opacity;
+  }
+
+  .anim-dropdown-in {
+    animation: uiDropdownReveal 145ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    transform-origin: top center;
+    will-change: transform, opacity;
+  }
+
+  .anim-sheet-up {
+    animation: uiSheetSlideUp 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    will-change: transform, opacity;
+  }
+
+  .anim-card-enter {
+    animation: uiCardRiseIn 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  @keyframes uiPopSpringIn {
+    0% {
+      opacity: 0;
+      transform: translate3d(0, 8px, 0) scale(0.95);
+    }
+    100% {
+      opacity: 1;
+      transform: translate3d(0, 0, 0) scale(1);
+    }
+  }
+
+  @keyframes uiDropdownReveal {
+    0% {
+      opacity: 0;
+      transform: translate3d(0, -5px, 0) scale(0.97);
+    }
+    100% {
+      opacity: 1;
+      transform: translate3d(0, 0, 0) scale(1);
+    }
+  }
+
+  @keyframes uiSheetSlideUp {
+    0% {
+      opacity: 0;
+      transform: translate3d(0, 14px, 0);
+    }
+    100% {
+      opacity: 1;
+      transform: translate3d(0, 0, 0);
+    }
+  }
+
+  @keyframes uiCardRiseIn {
+    0% {
+      opacity: 0;
+      transform: translate3d(0, 7px, 0);
+    }
+    100% {
+      opacity: 1;
+      transform: translate3d(0, 0, 0);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .anim-pop-in,
+    .anim-dropdown-in,
+    .anim-sheet-up,
+    .anim-card-enter,
+    .touch-tactile {
+      animation: none !important;
+      transition: none !important;
+    }
   }
 
   /* Theme Semantic Helpers */
@@ -243,10 +389,187 @@ body,
 }
 
 /* ==========================================================================
-   Unified Minimalist Studio Themes (6 Harmonized Palettes)
+   Multicolored Vibrant & Studio Themes (9 Harmonized Palettes)
    ========================================================================== */
 
-/* 1. Crisp Neutral Studio (Light) */
+/* 1. Vibrant Aurora (Multicolor Cyan + Violet + Coral Dark) */
+[data-app-theme="aurora"] {
+  --theme-canvas: #090b1a;
+  --theme-surface: rgba(17, 21, 44, 0.92);
+  --theme-elevated: rgba(25, 32, 66, 0.94);
+  --theme-border: rgba(139, 92, 246, 0.30);
+  --theme-text: #f8fafc;
+  --theme-muted: #a5b4fc;
+  --theme-accent: #06b6d4;
+  --theme-accent-2: #8b5cf6;
+  --theme-accent-3: #ec4899;
+  --theme-accent-soft: rgba(6, 182, 212, 0.15);
+  --theme-accent-text: #22d3ee;
+  --theme-gradient: linear-gradient(135deg, #06b6d4 0%, #8b5cf6 52%, #ec4899 100%);
+  --theme-canvas-bg: radial-gradient(circle at 12% 14%, rgba(6, 182, 212, 0.24), transparent 42%), radial-gradient(circle at 86% 18%, rgba(139, 92, 246, 0.26), transparent 44%), radial-gradient(circle at 52% 88%, rgba(236, 72, 153, 0.20), transparent 46%);
+  --theme-header: rgba(11, 14, 34, 0.88);
+  --theme-header-border: rgba(34, 211, 238, 0.45);
+  --theme-header-title: #38bdf8;
+  --theme-footer: rgba(19, 13, 40, 0.92);
+  --theme-footer-border: rgba(232, 121, 249, 0.44);
+  --theme-footer-title: #e879f9;
+  --theme-dropdown-bg: rgba(15, 22, 48, 0.97);
+  --theme-dropdown-border: rgba(56, 189, 248, 0.50);
+  --theme-dropdown-title: #22d3ee;
+  --theme-dropdown-2-border: rgba(52, 211, 153, 0.50);
+  --theme-dropdown-2-title: #34d399;
+  --theme-popup-bg: rgba(16, 18, 42, 0.98);
+  --theme-popup-header: rgba(29, 24, 66, 0.94);
+  --theme-popup-footer: rgba(14, 18, 44, 0.96);
+  --theme-popup-border: rgba(244, 114, 182, 0.50);
+  --theme-popup-title: #f472b6;
+  --theme-card-1-bg: rgba(15, 24, 52, 0.92);
+  --theme-card-1-border: rgba(34, 211, 238, 0.40);
+  --theme-card-1-title: #38bdf8;
+  --theme-card-1-icon: #22d3ee;
+  --theme-card-2-bg: rgba(24, 18, 52, 0.92);
+  --theme-card-2-border: rgba(167, 139, 250, 0.40);
+  --theme-card-2-title: #c084fc;
+  --theme-card-2-icon: #a78bfa;
+  --theme-card-3-bg: rgba(28, 22, 44, 0.92);
+  --theme-card-3-border: rgba(251, 191, 36, 0.40);
+  --theme-card-3-title: #fbbf24;
+  --theme-card-3-icon: #f59e0b;
+  --theme-card-4-bg: rgba(31, 17, 42, 0.92);
+  --theme-card-4-border: rgba(251, 113, 133, 0.40);
+  --theme-card-4-title: #fb7185;
+  --theme-card-4-icon: #f43f5e;
+  --theme-card-5-bg: rgba(14, 28, 42, 0.92);
+  --theme-card-5-border: rgba(52, 211, 153, 0.40);
+  --theme-card-5-title: #34d399;
+  --theme-card-5-icon: #10b981;
+  --tab-home-color: #22d3ee;
+  --tab-translator-color: #e879f9;
+  --tab-workspace-color: #fbbf24;
+  --tab-styling-color: #fb7185;
+  --tab-download-color: #34d399;
+  --tab-menu-color: #818cf8;
+}
+
+/* 2. Vibrant Prism (Multicolor Sunlit Sky + Emerald + Coral Light) */
+[data-app-theme="prism"] {
+  --theme-canvas: #f8fafc;
+  --theme-surface: rgba(255, 255, 255, 0.94);
+  --theme-elevated: rgba(241, 245, 249, 0.95);
+  --theme-border: rgba(14, 165, 233, 0.22);
+  --theme-text: #0f172a;
+  --theme-muted: #475569;
+  --theme-accent: #0284c7;
+  --theme-accent-2: #10b981;
+  --theme-accent-3: #f97316;
+  --theme-accent-soft: rgba(2, 132, 199, 0.11);
+  --theme-accent-text: #0369a1;
+  --theme-gradient: linear-gradient(135deg, #0284c7 0%, #10b981 52%, #f97316 100%);
+  --theme-canvas-bg: radial-gradient(circle at 10% 10%, rgba(14, 165, 233, 0.14), transparent 42%), radial-gradient(circle at 88% 16%, rgba(16, 185, 129, 0.14), transparent 42%), radial-gradient(circle at 50% 90%, rgba(249, 115, 22, 0.12), transparent 46%);
+  --theme-header: rgba(240, 249, 255, 0.92);
+  --theme-header-border: rgba(2, 132, 199, 0.36);
+  --theme-header-title: #0369a1;
+  --theme-footer: rgba(245, 243, 255, 0.94);
+  --theme-footer-border: rgba(124, 58, 237, 0.34);
+  --theme-footer-title: #6d28d9;
+  --theme-dropdown-bg: #ffffff;
+  --theme-dropdown-border: rgba(2, 132, 199, 0.38);
+  --theme-dropdown-title: #0369a1;
+  --theme-dropdown-2-border: rgba(5, 150, 105, 0.38);
+  --theme-dropdown-2-title: #047857;
+  --theme-popup-bg: #ffffff;
+  --theme-popup-header: #fdf2f8;
+  --theme-popup-footer: #f8fafc;
+  --theme-popup-border: rgba(225, 29, 72, 0.34);
+  --theme-popup-title: #be123c;
+  --theme-card-1-bg: rgba(240, 249, 255, 0.94);
+  --theme-card-1-border: rgba(2, 132, 199, 0.34);
+  --theme-card-1-title: #0369a1;
+  --theme-card-1-icon: #0284c7;
+  --theme-card-2-bg: rgba(245, 243, 255, 0.94);
+  --theme-card-2-border: rgba(124, 58, 237, 0.34);
+  --theme-card-2-title: #6d28d9;
+  --theme-card-2-icon: #7c3aed;
+  --theme-card-3-bg: rgba(255, 251, 235, 0.94);
+  --theme-card-3-border: rgba(217, 119, 6, 0.36);
+  --theme-card-3-title: #b45309;
+  --theme-card-3-icon: #d97706;
+  --theme-card-4-bg: rgba(255, 241, 242, 0.94);
+  --theme-card-4-border: rgba(225, 29, 72, 0.34);
+  --theme-card-4-title: #be123c;
+  --theme-card-4-icon: #e11d48;
+  --theme-card-5-bg: rgba(236, 253, 245, 0.94);
+  --theme-card-5-border: rgba(5, 150, 105, 0.34);
+  --theme-card-5-title: #047857;
+  --theme-card-5-icon: #059669;
+  --tab-home-color: #0284c7;
+  --tab-translator-color: #7c3aed;
+  --tab-workspace-color: #d97706;
+  --tab-styling-color: #e11d48;
+  --tab-download-color: #059669;
+  --tab-menu-color: #4f46e5;
+}
+
+/* 3. Sunset Fiesta (Multicolor Rose + Amber + Teal Dark) */
+[data-app-theme="sunset"] {
+  --theme-canvas: #130a1a;
+  --theme-surface: rgba(28, 16, 38, 0.92);
+  --theme-elevated: rgba(41, 23, 54, 0.94);
+  --theme-border: rgba(244, 63, 94, 0.28);
+  --theme-text: #fff1f2;
+  --theme-muted: #fda4af;
+  --theme-accent: #f43f5e;
+  --theme-accent-2: #f59e0b;
+  --theme-accent-3: #14b8a6;
+  --theme-accent-soft: rgba(244, 63, 94, 0.16);
+  --theme-accent-text: #fb7185;
+  --theme-gradient: linear-gradient(135deg, #f43f5e 0%, #f59e0b 52%, #14b8a6 100%);
+  --theme-canvas-bg: radial-gradient(circle at 14% 16%, rgba(244, 63, 94, 0.24), transparent 42%), radial-gradient(circle at 85% 22%, rgba(245, 158, 11, 0.20), transparent 44%), radial-gradient(circle at 48% 88%, rgba(20, 184, 166, 0.18), transparent 46%);
+  --theme-header: rgba(24, 11, 30, 0.90);
+  --theme-header-border: rgba(251, 113, 133, 0.45);
+  --theme-header-title: #fb7185;
+  --theme-footer: rgba(28, 15, 28, 0.92);
+  --theme-footer-border: rgba(251, 191, 36, 0.44);
+  --theme-footer-title: #fbbf24;
+  --theme-dropdown-bg: rgba(30, 17, 42, 0.98);
+  --theme-dropdown-border: rgba(251, 146, 60, 0.48);
+  --theme-dropdown-title: #fb923c;
+  --theme-dropdown-2-border: rgba(45, 212, 191, 0.48);
+  --theme-dropdown-2-title: #2dd4bf;
+  --theme-popup-bg: rgba(28, 15, 38, 0.98);
+  --theme-popup-header: rgba(46, 20, 52, 0.94);
+  --theme-popup-footer: rgba(24, 13, 34, 0.96);
+  --theme-popup-border: rgba(244, 63, 94, 0.50);
+  --theme-popup-title: #fda4af;
+  --theme-card-1-bg: rgba(34, 16, 38, 0.92);
+  --theme-card-1-border: rgba(251, 113, 133, 0.42);
+  --theme-card-1-title: #fb7185;
+  --theme-card-1-icon: #f43f5e;
+  --theme-card-2-bg: rgba(36, 22, 32, 0.92);
+  --theme-card-2-border: rgba(251, 191, 36, 0.40);
+  --theme-card-2-title: #fbbf24;
+  --theme-card-2-icon: #f59e0b;
+  --theme-card-3-bg: rgba(18, 28, 38, 0.92);
+  --theme-card-3-border: rgba(45, 212, 191, 0.40);
+  --theme-card-3-title: #2dd4bf;
+  --theme-card-3-icon: #14b8a6;
+  --theme-card-4-bg: rgba(30, 18, 48, 0.92);
+  --theme-card-4-border: rgba(192, 132, 252, 0.40);
+  --theme-card-4-title: #c084fc;
+  --theme-card-4-icon: #a855f7;
+  --theme-card-5-bg: rgba(36, 20, 26, 0.92);
+  --theme-card-5-border: rgba(251, 146, 60, 0.40);
+  --theme-card-5-title: #fb923c;
+  --theme-card-5-icon: #f97316;
+  --tab-home-color: #fb7185;
+  --tab-translator-color: #fbbf24;
+  --tab-workspace-color: #2dd4bf;
+  --tab-styling-color: #e879f9;
+  --tab-download-color: #34d399;
+  --tab-menu-color: #fb923c;
+}
+
+/* 4. Crisp Neutral Studio (Light) */
 [data-app-theme="classic"] {
   --theme-canvas: #f8fafc;
   --theme-surface: #ffffff;
@@ -255,12 +578,57 @@ body,
   --theme-text: #0f172a;
   --theme-muted: #64748b;
   --theme-accent: #0d9488;
+  --theme-accent-2: #0284c7;
+  --theme-accent-3: #6366f1;
   --theme-accent-soft: rgba(13, 148, 136, 0.10);
   --theme-accent-text: #0f766e;
-  --theme-header: rgba(255, 255, 255, 0.92);
+  --theme-gradient: linear-gradient(135deg, #0d9488 0%, #0284c7 55%, #6366f1 100%);
+  --theme-canvas-bg: radial-gradient(circle at 88% 12%, rgba(13, 148, 136, 0.06), transparent 40%), radial-gradient(circle at 14% 85%, rgba(99, 102, 241, 0.05), transparent 42%);
+  --theme-header: rgba(240, 253, 250, 0.94);
+  --theme-header-border: rgba(13, 148, 136, 0.34);
+  --theme-header-title: #0f766e;
+  --theme-footer: rgba(238, 242, 255, 0.94);
+  --theme-footer-border: rgba(79, 70, 229, 0.30);
+  --theme-footer-title: #4338ca;
+  --theme-dropdown-bg: #ffffff;
+  --theme-dropdown-border: rgba(2, 132, 199, 0.34);
+  --theme-dropdown-title: #0369a1;
+  --theme-dropdown-2-border: rgba(13, 148, 136, 0.34);
+  --theme-dropdown-2-title: #0f766e;
+  --theme-popup-bg: #ffffff;
+  --theme-popup-header: #f0f9ff;
+  --theme-popup-footer: #f8fafc;
+  --theme-popup-border: rgba(79, 70, 229, 0.32);
+  --theme-popup-title: #4338ca;
+  --theme-card-1-bg: rgba(240, 253, 250, 0.94);
+  --theme-card-1-border: rgba(13, 148, 136, 0.32);
+  --theme-card-1-title: #0f766e;
+  --theme-card-1-icon: #0d9488;
+  --theme-card-2-bg: rgba(240, 249, 255, 0.94);
+  --theme-card-2-border: rgba(2, 132, 199, 0.32);
+  --theme-card-2-title: #0369a1;
+  --theme-card-2-icon: #0284c7;
+  --theme-card-3-bg: rgba(255, 251, 235, 0.94);
+  --theme-card-3-border: rgba(217, 119, 6, 0.32);
+  --theme-card-3-title: #b45309;
+  --theme-card-3-icon: #d97706;
+  --theme-card-4-bg: rgba(255, 241, 242, 0.94);
+  --theme-card-4-border: rgba(225, 29, 72, 0.30);
+  --theme-card-4-title: #be123c;
+  --theme-card-4-icon: #e11d48;
+  --theme-card-5-bg: rgba(238, 242, 255, 0.94);
+  --theme-card-5-border: rgba(99, 102, 241, 0.32);
+  --theme-card-5-title: #4338ca;
+  --theme-card-5-icon: #4f46e5;
+  --tab-home-color: #0d9488;
+  --tab-translator-color: #4f46e5;
+  --tab-workspace-color: #d97706;
+  --tab-styling-color: #e11d48;
+  --tab-download-color: #0284c7;
+  --tab-menu-color: #7c3aed;
 }
 
-/* 2. Deep Obsidian Cinema (Dark-First Flagship) */
+/* 5. Deep Obsidian Cinema (Dark-First Flagship) */
 [data-app-theme="cinematic"] {
   --theme-canvas: #090a0d;
   --theme-surface: #111318;
@@ -269,77 +637,516 @@ body,
   --theme-text: #f1f5f9;
   --theme-muted: #94a3b8;
   --theme-accent: #14b8a6;
+  --theme-accent-2: #3b82f6;
+  --theme-accent-3: #f59e0b;
   --theme-accent-soft: rgba(20, 184, 166, 0.13);
   --theme-accent-text: #2dd4bf;
-  --theme-header: rgba(9, 10, 13, 0.92);
+  --theme-gradient: linear-gradient(135deg, #14b8a6 0%, #3b82f6 55%, #f59e0b 100%);
+  --theme-canvas-bg: radial-gradient(circle at 15% 15%, rgba(20, 184, 166, 0.10), transparent 40%), radial-gradient(circle at 85% 80%, rgba(59, 130, 246, 0.08), transparent 42%);
+  --theme-header: rgba(11, 15, 20, 0.94);
+  --theme-header-border: rgba(45, 212, 191, 0.42);
+  --theme-header-title: #2dd4bf;
+  --theme-footer: rgba(13, 16, 24, 0.95);
+  --theme-footer-border: rgba(96, 165, 250, 0.42);
+  --theme-footer-title: #60a5fa;
+  --theme-dropdown-bg: #131722;
+  --theme-dropdown-border: rgba(56, 189, 248, 0.45);
+  --theme-dropdown-title: #38bdf8;
+  --theme-dropdown-2-border: rgba(251, 191, 36, 0.45);
+  --theme-dropdown-2-title: #fbbf24;
+  --theme-popup-bg: #13161e;
+  --theme-popup-header: #1a1f2c;
+  --theme-popup-footer: #10131a;
+  --theme-popup-border: rgba(167, 139, 250, 0.45);
+  --theme-popup-title: #c084fc;
+  --theme-card-1-bg: rgba(14, 24, 26, 0.94);
+  --theme-card-1-border: rgba(45, 212, 191, 0.36);
+  --theme-card-1-title: #2dd4bf;
+  --theme-card-1-icon: #14b8a6;
+  --theme-card-2-bg: rgba(16, 20, 34, 0.94);
+  --theme-card-2-border: rgba(96, 165, 250, 0.36);
+  --theme-card-2-title: #60a5fa;
+  --theme-card-2-icon: #3b82f6;
+  --theme-card-3-bg: rgba(26, 22, 14, 0.94);
+  --theme-card-3-border: rgba(251, 191, 36, 0.36);
+  --theme-card-3-title: #fbbf24;
+  --theme-card-3-icon: #f59e0b;
+  --theme-card-4-bg: rgba(28, 16, 24, 0.94);
+  --theme-card-4-border: rgba(251, 113, 133, 0.36);
+  --theme-card-4-title: #fb7185;
+  --theme-card-4-icon: #f43f5e;
+  --theme-card-5-bg: rgba(22, 18, 34, 0.94);
+  --theme-card-5-border: rgba(167, 139, 250, 0.36);
+  --theme-card-5-title: #c084fc;
+  --theme-card-5-icon: #a855f7;
+  --tab-home-color: #2dd4bf;
+  --tab-translator-color: #c084fc;
+  --tab-workspace-color: #fbbf24;
+  --tab-styling-color: #fb7185;
+  --tab-download-color: #60a5fa;
+  --tab-menu-color: #34d399;
 }
 
-/* 3. Cyber Cyan (Refined Dark) */
+/* 6. Cyber Cyan (Refined Dark) */
 [data-app-theme="cyber"] {
   --theme-canvas: #07090e;
   --theme-surface: #0d111a;
   --theme-elevated: #141a26;
-  --theme-border: rgba(34, 211, 238, 0.20);
+  --theme-border: rgba(34, 211, 238, 0.22);
   --theme-text: #ecfeff;
   --theme-muted: #94a3b8;
   --theme-accent: #06b6d4;
+  --theme-accent-2: #a855f7;
+  --theme-accent-3: #10b981;
   --theme-accent-soft: rgba(6, 182, 212, 0.14);
   --theme-accent-text: #22d3ee;
-  --theme-header: rgba(7, 9, 14, 0.94);
+  --theme-gradient: linear-gradient(135deg, #06b6d4 0%, #a855f7 52%, #10b981 100%);
+  --theme-canvas-bg: radial-gradient(circle at 16% 18%, rgba(6, 182, 212, 0.18), transparent 42%), radial-gradient(circle at 84% 78%, rgba(168, 85, 247, 0.15), transparent 44%);
+  --theme-header: rgba(8, 13, 22, 0.94);
+  --theme-header-border: rgba(34, 211, 238, 0.48);
+  --theme-header-title: #22d3ee;
+  --theme-footer: rgba(14, 12, 26, 0.95);
+  --theme-footer-border: rgba(192, 132, 252, 0.45);
+  --theme-footer-title: #c084fc;
+  --theme-dropdown-bg: #0f1522;
+  --theme-dropdown-border: rgba(34, 211, 238, 0.48);
+  --theme-dropdown-title: #22d3ee;
+  --theme-dropdown-2-border: rgba(52, 211, 153, 0.48);
+  --theme-dropdown-2-title: #34d399;
+  --theme-popup-bg: #101420;
+  --theme-popup-header: #181d30;
+  --theme-popup-footer: #0c101a;
+  --theme-popup-border: rgba(168, 85, 247, 0.48);
+  --theme-popup-title: #c084fc;
+  --theme-card-1-bg: rgba(10, 21, 30, 0.94);
+  --theme-card-1-border: rgba(34, 211, 238, 0.40);
+  --theme-card-1-title: #22d3ee;
+  --theme-card-1-icon: #06b6d4;
+  --theme-card-2-bg: rgba(20, 14, 34, 0.94);
+  --theme-card-2-border: rgba(192, 132, 252, 0.40);
+  --theme-card-2-title: #c084fc;
+  --theme-card-2-icon: #a855f7;
+  --theme-card-3-bg: rgba(10, 26, 24, 0.94);
+  --theme-card-3-border: rgba(52, 211, 153, 0.40);
+  --theme-card-3-title: #34d399;
+  --theme-card-3-icon: #10b981;
+  --theme-card-4-bg: rgba(28, 16, 28, 0.94);
+  --theme-card-4-border: rgba(244, 114, 182, 0.40);
+  --theme-card-4-title: #f472b6;
+  --theme-card-4-icon: #ec4899;
+  --theme-card-5-bg: rgba(24, 22, 14, 0.94);
+  --theme-card-5-border: rgba(251, 191, 36, 0.40);
+  --theme-card-5-title: #fbbf24;
+  --theme-card-5-icon: #f59e0b;
+  --tab-home-color: #22d3ee;
+  --tab-translator-color: #c084fc;
+  --tab-workspace-color: #fbbf24;
+  --tab-styling-color: #f472b6;
+  --tab-download-color: #34d399;
+  --tab-menu-color: #60a5fa;
 }
 
-/* 4. Synthwave Dusk (Refined Violet-Rose) */
+/* 7. Synthwave Dusk (Refined Violet-Rose) */
 [data-app-theme="neon"] {
   --theme-canvas: #0c0916;
   --theme-surface: #141024;
   --theme-elevated: #1c1732;
-  --theme-border: rgba(244, 114, 182, 0.20);
+  --theme-border: rgba(244, 114, 182, 0.22);
   --theme-text: #fdf2f8;
   --theme-muted: #a79bc2;
   --theme-accent: #ec4899;
+  --theme-accent-2: #8b5cf6;
+  --theme-accent-3: #06b6d4;
   --theme-accent-soft: rgba(236, 72, 153, 0.14);
   --theme-accent-text: #f472b6;
-  --theme-header: rgba(12, 9, 22, 0.94);
+  --theme-gradient: linear-gradient(135deg, #ec4899 0%, #8b5cf6 52%, #06b6d4 100%);
+  --theme-canvas-bg: radial-gradient(circle at 16% 16%, rgba(236, 72, 153, 0.18), transparent 42%), radial-gradient(circle at 84% 82%, rgba(6, 182, 212, 0.14), transparent 44%);
+  --theme-header: rgba(18, 11, 32, 0.94);
+  --theme-header-border: rgba(244, 114, 182, 0.48);
+  --theme-header-title: #f472b6;
+  --theme-footer: rgba(15, 16, 36, 0.95);
+  --theme-footer-border: rgba(34, 211, 238, 0.45);
+  --theme-footer-title: #22d3ee;
+  --theme-dropdown-bg: #18122b;
+  --theme-dropdown-border: rgba(244, 114, 182, 0.48);
+  --theme-dropdown-title: #f472b6;
+  --theme-dropdown-2-border: rgba(34, 211, 238, 0.48);
+  --theme-dropdown-2-title: #22d3ee;
+  --theme-popup-bg: #17112a;
+  --theme-popup-header: #251a40;
+  --theme-popup-footer: #120d22;
+  --theme-popup-border: rgba(139, 92, 246, 0.50);
+  --theme-popup-title: #c084fc;
+  --theme-card-1-bg: rgba(30, 16, 36, 0.94);
+  --theme-card-1-border: rgba(244, 114, 182, 0.42);
+  --theme-card-1-title: #f472b6;
+  --theme-card-1-icon: #ec4899;
+  --theme-card-2-bg: rgba(22, 16, 44, 0.94);
+  --theme-card-2-border: rgba(167, 139, 250, 0.42);
+  --theme-card-2-title: #c084fc;
+  --theme-card-2-icon: #8b5cf6;
+  --theme-card-3-bg: rgba(12, 24, 40, 0.94);
+  --theme-card-3-border: rgba(34, 211, 238, 0.42);
+  --theme-card-3-title: #22d3ee;
+  --theme-card-3-icon: #06b6d4;
+  --theme-card-4-bg: rgba(32, 22, 28, 0.94);
+  --theme-card-4-border: rgba(251, 191, 36, 0.40);
+  --theme-card-4-title: #fbbf24;
+  --theme-card-4-icon: #f59e0b;
+  --theme-card-5-bg: rgba(14, 28, 34, 0.94);
+  --theme-card-5-border: rgba(52, 211, 153, 0.40);
+  --theme-card-5-title: #34d399;
+  --theme-card-5-icon: #10b981;
+  --tab-home-color: #f472b6;
+  --tab-translator-color: #c084fc;
+  --tab-workspace-color: #22d3ee;
+  --tab-styling-color: #fbbf24;
+  --tab-download-color: #34d399;
+  --tab-menu-color: #818cf8;
 }
 
-/* 5. Midnight Sapphire (Oceanic Slate) */
+/* 8. Midnight Sapphire (Oceanic Slate) */
 [data-app-theme="sapphire"] {
   --theme-canvas: #070e1b;
   --theme-surface: #0d1729;
   --theme-elevated: #132139;
-  --theme-border: rgba(56, 189, 248, 0.20);
+  --theme-border: rgba(56, 189, 248, 0.22);
   --theme-text: #f0f9ff;
   --theme-muted: #94a9c9;
   --theme-accent: #0ea5e9;
+  --theme-accent-2: #6366f1;
+  --theme-accent-3: #14b8a6;
   --theme-accent-soft: rgba(14, 165, 233, 0.14);
   --theme-accent-text: #38bdf8;
-  --theme-header: rgba(7, 14, 27, 0.94);
+  --theme-gradient: linear-gradient(135deg, #0ea5e9 0%, #6366f1 52%, #14b8a6 100%);
+  --theme-canvas-bg: radial-gradient(circle at 18% 16%, rgba(14, 165, 233, 0.18), transparent 42%), radial-gradient(circle at 82% 84%, rgba(99, 102, 241, 0.16), transparent 44%);
+  --theme-header: rgba(8, 17, 34, 0.94);
+  --theme-header-border: rgba(56, 189, 248, 0.46);
+  --theme-header-title: #38bdf8;
+  --theme-footer: rgba(12, 16, 36, 0.95);
+  --theme-footer-border: rgba(129, 140, 248, 0.45);
+  --theme-footer-title: #818cf8;
+  --theme-dropdown-bg: #101c34;
+  --theme-dropdown-border: rgba(56, 189, 248, 0.46);
+  --theme-dropdown-title: #38bdf8;
+  --theme-dropdown-2-border: rgba(45, 212, 191, 0.46);
+  --theme-dropdown-2-title: #2dd4bf;
+  --theme-popup-bg: #0f1b32;
+  --theme-popup-header: #162646;
+  --theme-popup-footer: #0b1528;
+  --theme-popup-border: rgba(99, 102, 241, 0.48);
+  --theme-popup-title: #a5b4fc;
+  --theme-card-1-bg: rgba(12, 24, 44, 0.94);
+  --theme-card-1-border: rgba(56, 189, 248, 0.38);
+  --theme-card-1-title: #38bdf8;
+  --theme-card-1-icon: #0ea5e9;
+  --theme-card-2-bg: rgba(18, 20, 46, 0.94);
+  --theme-card-2-border: rgba(129, 140, 248, 0.38);
+  --theme-card-2-title: #a5b4fc;
+  --theme-card-2-icon: #6366f1;
+  --theme-card-3-bg: rgba(10, 28, 38, 0.94);
+  --theme-card-3-border: rgba(45, 212, 191, 0.38);
+  --theme-card-3-title: #2dd4bf;
+  --theme-card-3-icon: #14b8a6;
+  --theme-card-4-bg: rgba(26, 22, 36, 0.94);
+  --theme-card-4-border: rgba(251, 191, 36, 0.38);
+  --theme-card-4-title: #fbbf24;
+  --theme-card-4-icon: #f59e0b;
+  --theme-card-5-bg: rgba(28, 18, 38, 0.94);
+  --theme-card-5-border: rgba(244, 114, 182, 0.38);
+  --theme-card-5-title: #f472b6;
+  --theme-card-5-icon: #ec4899;
+  --tab-home-color: #38bdf8;
+  --tab-translator-color: #a5b4fc;
+  --tab-workspace-color: #fbbf24;
+  --tab-styling-color: #f472b6;
+  --tab-download-color: #2dd4bf;
+  --tab-menu-color: #c084fc;
 }
 
-/* 6. Warm Amber Cinema (Espresso Gold) */
+/* 9. Warm Amber Cinema (Espresso Gold) */
 [data-app-theme="amber"] {
   --theme-canvas: #100c08;
   --theme-surface: #19130d;
   --theme-elevated: #231b12;
-  --theme-border: rgba(245, 158, 11, 0.20);
+  --theme-border: rgba(245, 158, 11, 0.22);
   --theme-text: #fffbeb;
   --theme-muted: #b8a38c;
   --theme-accent: #f59e0b;
+  --theme-accent-2: #f97316;
+  --theme-accent-3: #10b981;
   --theme-accent-soft: rgba(245, 158, 11, 0.14);
   --theme-accent-text: #fbbf24;
-  --theme-header: rgba(16, 12, 8, 0.94);
+  --theme-gradient: linear-gradient(135deg, #f59e0b 0%, #f97316 52%, #10b981 100%);
+  --theme-canvas-bg: radial-gradient(circle at 16% 18%, rgba(245, 158, 11, 0.18), transparent 42%), radial-gradient(circle at 82% 82%, rgba(249, 115, 22, 0.14), transparent 44%);
+  --theme-header: rgba(22, 16, 10, 0.94);
+  --theme-header-border: rgba(251, 191, 36, 0.45);
+  --theme-header-title: #fbbf24;
+  --theme-footer: rgba(24, 15, 12, 0.95);
+  --theme-footer-border: rgba(251, 146, 60, 0.45);
+  --theme-footer-title: #fb923c;
+  --theme-dropdown-bg: #20170f;
+  --theme-dropdown-border: rgba(251, 191, 36, 0.46);
+  --theme-dropdown-title: #fbbf24;
+  --theme-dropdown-2-border: rgba(52, 211, 153, 0.46);
+  --theme-dropdown-2-title: #34d399;
+  --theme-popup-bg: #1f160e;
+  --theme-popup-header: #2d2014;
+  --theme-popup-footer: #18110b;
+  --theme-popup-border: rgba(249, 115, 22, 0.48);
+  --theme-popup-title: #fb923c;
+  --theme-card-1-bg: rgba(30, 22, 13, 0.94);
+  --theme-card-1-border: rgba(251, 191, 36, 0.38);
+  --theme-card-1-title: #fbbf24;
+  --theme-card-1-icon: #f59e0b;
+  --theme-card-2-bg: rgba(34, 20, 14, 0.94);
+  --theme-card-2-border: rgba(251, 146, 60, 0.38);
+  --theme-card-2-title: #fb923c;
+  --theme-card-2-icon: #f97316;
+  --theme-card-3-bg: rgba(16, 28, 22, 0.94);
+  --theme-card-3-border: rgba(52, 211, 153, 0.38);
+  --theme-card-3-title: #34d399;
+  --theme-card-3-icon: #10b981;
+  --theme-card-4-bg: rgba(34, 17, 22, 0.94);
+  --theme-card-4-border: rgba(251, 113, 133, 0.38);
+  --theme-card-4-title: #fb7185;
+  --theme-card-4-icon: #f43f5e;
+  --theme-card-5-bg: rgba(20, 24, 34, 0.94);
+  --theme-card-5-border: rgba(56, 189, 248, 0.38);
+  --theme-card-5-title: #38bdf8;
+  --theme-card-5-icon: #0ea5e9;
+  --tab-home-color: #fbbf24;
+  --tab-translator-color: #fb923c;
+  --tab-workspace-color: #38bdf8;
+  --tab-styling-color: #fb7185;
+  --tab-download-color: #34d399;
+  --tab-menu-color: #c084fc;
 }
 
 /* Apply Unified Theme Tokens Cohesively Across All App Elements */
 body,
 .theme-root {
   background-color: var(--theme-canvas) !important;
+  background-image: var(--theme-canvas-bg, none);
+  background-attachment: fixed;
   color: var(--theme-text);
 }
 
 .theme-root header {
   background-color: var(--theme-header) !important;
   border-bottom-color: var(--theme-border) !important;
+}
+
+:root[data-multicolor="true"] .theme-root header,
+:root[data-multicolor="true"] .theme-root .mc-header {
+  background-color: var(--theme-header) !important;
+  border-color: var(--theme-header-border, var(--theme-border)) !important;
+}
+
+:root[data-multicolor="true"] .theme-root .mc-header-title {
+  color: var(--theme-header-title, var(--theme-text)) !important;
+}
+
+:root[data-multicolor="true"] .theme-root .mc-footer {
+  background-color: var(--theme-footer, var(--theme-header)) !important;
+  border-color: var(--theme-footer-border, var(--theme-border)) !important;
+}
+
+:root[data-multicolor="true"] .theme-root .mc-footer-title {
+  color: var(--theme-footer-title, var(--theme-accent-text)) !important;
+}
+
+/* Distinct Multicolored Cards (Containers, Borders & Titles) */
+:root[data-multicolor="true"] .theme-root .mc-card-1 {
+  background-color: var(--theme-card-1-bg, var(--theme-surface)) !important;
+  border-color: var(--theme-card-1-border, var(--theme-border)) !important;
+}
+:root[data-multicolor="true"] .theme-root .mc-card-1 .mc-card-title,
+:root[data-multicolor="true"] .theme-root .mc-card-1 > div:first-child h2,
+:root[data-multicolor="true"] .theme-root .mc-card-1 > div:first-child h3 {
+  color: var(--theme-card-1-title, var(--theme-text)) !important;
+}
+:root[data-multicolor="true"] .theme-root .mc-card-1 .mc-card-icon {
+  color: var(--theme-card-1-icon, var(--theme-accent)) !important;
+}
+
+:root[data-multicolor="true"] .theme-root .mc-card-2 {
+  background-color: var(--theme-card-2-bg, var(--theme-surface)) !important;
+  border-color: var(--theme-card-2-border, var(--theme-border)) !important;
+}
+:root[data-multicolor="true"] .theme-root .mc-card-2 .mc-card-title,
+:root[data-multicolor="true"] .theme-root .mc-card-2 > div:first-child h2,
+:root[data-multicolor="true"] .theme-root .mc-card-2 > div:first-child h3 {
+  color: var(--theme-card-2-title, var(--theme-text)) !important;
+}
+:root[data-multicolor="true"] .theme-root .mc-card-2 .mc-card-icon {
+  color: var(--theme-card-2-icon, var(--theme-accent-2)) !important;
+}
+
+:root[data-multicolor="true"] .theme-root .mc-card-3 {
+  background-color: var(--theme-card-3-bg, var(--theme-surface)) !important;
+  border-color: var(--theme-card-3-border, var(--theme-border)) !important;
+}
+:root[data-multicolor="true"] .theme-root .mc-card-3 .mc-card-title,
+:root[data-multicolor="true"] .theme-root .mc-card-3 > div:first-child h2,
+:root[data-multicolor="true"] .theme-root .mc-card-3 > div:first-child h3 {
+  color: var(--theme-card-3-title, var(--theme-text)) !important;
+}
+:root[data-multicolor="true"] .theme-root .mc-card-3 .mc-card-icon {
+  color: var(--theme-card-3-icon, var(--theme-accent-3)) !important;
+}
+
+:root[data-multicolor="true"] .theme-root .mc-card-4 {
+  background-color: var(--theme-card-4-bg, var(--theme-surface)) !important;
+  border-color: var(--theme-card-4-border, var(--theme-border)) !important;
+}
+:root[data-multicolor="true"] .theme-root .mc-card-4 .mc-card-title,
+:root[data-multicolor="true"] .theme-root .mc-card-4 > div:first-child h2,
+:root[data-multicolor="true"] .theme-root .mc-card-4 > div:first-child h3 {
+  color: var(--theme-card-4-title, var(--theme-text)) !important;
+}
+:root[data-multicolor="true"] .theme-root .mc-card-4 .mc-card-icon {
+  color: var(--theme-card-4-icon, var(--theme-accent-3)) !important;
+}
+
+:root[data-multicolor="true"] .theme-root .mc-card-5 {
+  background-color: var(--theme-card-5-bg, var(--theme-surface)) !important;
+  border-color: var(--theme-card-5-border, var(--theme-border)) !important;
+}
+:root[data-multicolor="true"] .theme-root .mc-card-5 .mc-card-title,
+:root[data-multicolor="true"] .theme-root .mc-card-5 > div:first-child h2,
+:root[data-multicolor="true"] .theme-root .mc-card-5 > div:first-child h3 {
+  color: var(--theme-card-5-title, var(--theme-text)) !important;
+}
+:root[data-multicolor="true"] .theme-root .mc-card-5 .mc-card-icon {
+  color: var(--theme-card-5-icon, var(--theme-accent)) !important;
+}
+
+/* Distinct Dropdown Menus & Selects */
+:root[data-multicolor="true"] .theme-root .mc-dropdown {
+  background-color: var(--theme-dropdown-bg, var(--theme-surface)) !important;
+  border-color: var(--theme-dropdown-border, var(--theme-border)) !important;
+}
+:root[data-multicolor="true"] .theme-root .mc-dropdown-header {
+  border-color: var(--theme-dropdown-border, var(--theme-border)) !important;
+}
+:root[data-multicolor="true"] .theme-root .mc-dropdown-title {
+  color: var(--theme-dropdown-title, var(--theme-accent-text)) !important;
+  opacity: 1 !important;
+}
+
+:root[data-multicolor="true"] .theme-root .mc-dropdown-alt {
+  background-color: var(--theme-dropdown-bg, var(--theme-surface)) !important;
+  border-color: var(--theme-custom-dropdown-border, var(--theme-dropdown-2-border, var(--theme-border))) !important;
+}
+:root[data-multicolor="true"] .theme-root .mc-dropdown-alt-title {
+  color: var(--theme-custom-dropdown-title, var(--theme-dropdown-2-title, var(--theme-accent-text))) !important;
+  opacity: 1 !important;
+}
+
+:root[data-multicolor="true"] .theme-root select {
+  border-color: var(--theme-dropdown-border, var(--theme-border)) !important;
+}
+:root[data-multicolor="true"] .theme-root select:focus {
+  outline: none;
+  border-color: var(--theme-dropdown-title, var(--theme-accent)) !important;
+}
+
+/* Role-Coded Popup Menus, Context Popups, Drawers & Modals */
+:root[data-multicolor="true"] .theme-root .mc-popup {
+  background-color: var(--theme-popup-bg, var(--theme-surface)) !important;
+  border-color: var(--theme-custom-popup-border, var(--mc-role-border, var(--theme-popup-border, var(--theme-border)))) !important;
+}
+:root[data-multicolor="true"] .theme-root .mc-popup-header {
+  background-color: var(--mc-role-header, var(--theme-popup-header, var(--theme-elevated))) !important;
+  border-color: var(--theme-custom-popup-border, var(--mc-role-border, var(--theme-popup-border, var(--theme-border)))) !important;
+}
+:root[data-multicolor="true"] .theme-root .mc-popup-title {
+  color: var(--theme-custom-popup-title, var(--mc-role-title, var(--theme-popup-title, var(--theme-text)))) !important;
+  opacity: 1 !important;
+}
+:root[data-multicolor="true"] .theme-root .mc-popup-footer {
+  background-color: var(--theme-popup-footer, var(--theme-elevated)) !important;
+  border-color: var(--theme-custom-popup-border, var(--mc-role-border, var(--theme-popup-border, var(--theme-border)))) !important;
+}
+
+/* Dark Theme Popup Role Accents */
+:root[data-multicolor="true"] .theme-root.dark .mc-role-ai {
+  --mc-role-border: rgba(192, 132, 252, 0.52);
+  --mc-role-header: rgba(46, 20, 72, 0.92);
+  --mc-role-title: #e879f9;
+}
+:root[data-multicolor="true"] .theme-root.dark .mc-role-timing {
+  --mc-role-border: rgba(251, 191, 36, 0.50);
+  --mc-role-header: rgba(46, 31, 14, 0.92);
+  --mc-role-title: #fbbf24;
+}
+:root[data-multicolor="true"] .theme-root.dark .mc-role-style {
+  --mc-role-border: rgba(251, 113, 133, 0.50);
+  --mc-role-header: rgba(50, 18, 38, 0.92);
+  --mc-role-title: #fb7185;
+}
+:root[data-multicolor="true"] .theme-root.dark .mc-role-edit {
+  --mc-role-border: rgba(34, 211, 238, 0.50);
+  --mc-role-header: rgba(14, 34, 52, 0.92);
+  --mc-role-title: #22d3ee;
+}
+:root[data-multicolor="true"] .theme-root.dark .mc-role-export {
+  --mc-role-border: rgba(52, 211, 153, 0.50);
+  --mc-role-header: rgba(12, 38, 34, 0.92);
+  --mc-role-title: #34d399;
+}
+:root[data-multicolor="true"] .theme-root.dark .mc-role-danger {
+  --mc-role-border: rgba(248, 113, 113, 0.55);
+  --mc-role-header: rgba(56, 16, 20, 0.94);
+  --mc-role-title: #fca5a5;
+}
+:root[data-multicolor="true"] .theme-root.dark .mc-role-info {
+  --mc-role-border: rgba(96, 165, 250, 0.50);
+  --mc-role-header: rgba(16, 28, 56, 0.92);
+  --mc-role-title: #60a5fa;
+}
+
+/* Light Theme Popup Role Accents (Prism & Classic - WCAG AA High Contrast) */
+:root[data-multicolor="true"] .theme-root:not(.dark) .mc-role-ai {
+  --mc-role-border: rgba(124, 58, 237, 0.38);
+  --mc-role-header: #f5f3ff;
+  --mc-role-title: #6d28d9;
+}
+:root[data-multicolor="true"] .theme-root:not(.dark) .mc-role-timing {
+  --mc-role-border: rgba(217, 119, 6, 0.40);
+  --mc-role-header: #fffbeb;
+  --mc-role-title: #b45309;
+}
+:root[data-multicolor="true"] .theme-root:not(.dark) .mc-role-style {
+  --mc-role-border: rgba(225, 29, 72, 0.38);
+  --mc-role-header: #fff1f2;
+  --mc-role-title: #be123c;
+}
+:root[data-multicolor="true"] .theme-root:not(.dark) .mc-role-edit {
+  --mc-role-border: rgba(2, 132, 199, 0.38);
+  --mc-role-header: #f0f9ff;
+  --mc-role-title: #0369a1;
+}
+:root[data-multicolor="true"] .theme-root:not(.dark) .mc-role-export {
+  --mc-role-border: rgba(5, 150, 105, 0.38);
+  --mc-role-header: #ecfdf5;
+  --mc-role-title: #047857;
+}
+:root[data-multicolor="true"] .theme-root:not(.dark) .mc-role-danger {
+  --mc-role-border: rgba(220, 38, 38, 0.44);
+  --mc-role-header: #fef2f2;
+  --mc-role-title: #b91c1c;
+}
+:root[data-multicolor="true"] .theme-root:not(.dark) .mc-role-info {
+  --mc-role-border: rgba(79, 70, 229, 0.38);
+  --mc-role-header: #eef2ff;
+  --mc-role-title: #4338ca;
+}
+
+.theme-root .vibrant-gradient-bg {
+  background: var(--theme-gradient, var(--theme-accent)) !important;
+  color: #ffffff;
 }
 
 .theme-root .theme-card,
@@ -417,7 +1224,7 @@ body,
   width: 24px;
   height: 24px;
   border-radius: 9999px;
-  background: var(--theme-accent);
+  background: var(--theme-gradient, var(--theme-accent));
   border: 2.5px solid #ffffff;
   box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.35), 0 3px 10px rgba(0, 0, 0, 0.45);
   margin-top: -9px;
@@ -444,7 +1251,7 @@ body,
   width: 24px;
   height: 24px;
   border-radius: 9999px;
-  background: var(--theme-accent);
+  background: var(--theme-gradient, var(--theme-accent));
   border: 2.5px solid #ffffff;
   box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.35), 0 3px 10px rgba(0, 0, 0, 0.45);
   cursor: grab;

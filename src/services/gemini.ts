@@ -449,6 +449,114 @@ ${cleaned.slice(0, 7500)}`;
   }
 
   /**
+   * Suggests a short, clean movie/series title using Gemini + Google Search grounding.
+   */
+  async suggestShortFileName(
+    params: {
+      rawFileName?: string;
+      context?: string;
+      sampleLines?: string;
+    },
+    signal?: AbortSignal
+  ): Promise<{ primary: string; alternatives: string[]; usedSearch: boolean }> {
+    const rawFileName = (params.rawFileName || "").trim();
+    const context = stripFormatting(params.context || "").trim().slice(0, 1200);
+    const sampleLines = stripFormatting(params.sampleLines || "").trim().slice(0, 1200);
+
+    const sanitize = (s: unknown) =>
+      String(s || "")
+        .replace(/\.(srt|vtt|ass|ssa|sbv|lrc|txt|json)$/i, "")
+        .replace(/[._~+=|`\\/:*?"<>!@#$%^&,;(){}\[\]]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 72);
+
+    const parseJsonSuggestions = (rawText: string) => {
+      const cleaned = rawText
+        .replace(/^```json\s*/i, "")
+        .replace(/^```\s*/i, "")
+        .replace(/```$/i, "")
+        .trim();
+      const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+      const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : cleaned);
+      const primary = sanitize(parsed?.primary);
+      const altsRaw: unknown[] = Array.isArray(parsed?.alternatives) ? parsed.alternatives : [];
+      const alternatives = Array.from(
+        new Set(altsRaw.map(sanitize).filter((v) => v && v !== primary))
+      ).slice(0, 3);
+      return { primary, alternatives };
+    };
+
+    const localKey = this.getEffectiveLocalKey();
+    if (localKey) {
+      const prompt = `Identify the official movie, drama, anime, or TV series title (and release year or season/episode numerals like 2024, S01E02, S1E1, S01, E01, Season 1, Episode 2, or 1 2 3 if present) from the clues below, and suggest 3 clean base filenames (do NOT include .srt extension or language tags).
+
+Clues:
+- Original File Name: ${rawFileName || "unknown"}
+- Cultural Context: ${context || "none"}
+- Sample Dialogue: ${sampleLines || "none"}
+
+Rules:
+- Remove extra dots (.), underscores (_), brackets, parentheses, and extra symbols.
+- Keep the release year (e.g. 2024) and all season/episode numerals (e.g. S01E02, S1E1, S01, E01, Season 1, Episode 2, 1, 2, 3).
+- Strip release tags (1080p, BluRay, WEB-DL, x265, YTS, etc.).
+- Output ONLY valid JSON: {"primary":"...","alternatives":["...","..."]}`;
+
+      let usedSearch = false;
+      let res: { text: string; totalTokenCount?: number };
+      try {
+        res = await this.directGenerateContent(localKey, this.primaryModel, prompt, {
+          useGoogleSearch: true,
+          signal,
+        });
+        usedSearch = Boolean(res?.text?.trim());
+      } catch {
+        res = await this.directGenerateContent(localKey, this.primaryModel, prompt, {
+          useGoogleSearch: false,
+          signal,
+        });
+      }
+      const parsed = parseJsonSuggestions(res.text || "");
+      if (parsed.primary) {
+        quotaManager.recordRequest(res.totalTokenCount || 250);
+        return { ...parsed, usedSearch };
+      }
+      throw new Error("Could not parse filename suggestion.");
+    }
+
+    const data = await this.postJson<{
+      primary?: string;
+      alternatives?: string[];
+      usedSearch?: boolean;
+      usageMetadata?: { totalTokenCount?: number };
+    }>(
+      "/api/gemini/suggest-filename",
+      {
+        rawFileName,
+        context,
+        sampleLines,
+        model: this.primaryModel,
+      },
+      signal
+    );
+
+    const primary = sanitize(data.primary);
+    const alternatives = Array.isArray(data.alternatives)
+      ? data.alternatives.map(sanitize).filter((v) => v && v !== primary)
+      : [];
+
+    if (!primary) {
+      throw new Error("No filename suggestion returned.");
+    }
+    quotaManager.recordRequest(data.usageMetadata?.totalTokenCount || 250);
+    return {
+      primary,
+      alternatives,
+      usedSearch: Boolean(data.usedSearch),
+    };
+  }
+
+  /**
    * AI Cinema: Explains movie/series, breakdowns plot, provides simple story, generates reviews in Urdu and English.
    */
   async generateCinemaInsights(

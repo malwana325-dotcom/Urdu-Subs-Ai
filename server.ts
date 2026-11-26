@@ -3,6 +3,9 @@ import express from "express";
 import type { NextFunction, Request, Response } from "express";
 import path from "path";
 import { fileURLToPath } from "url";
+import { lookup as dnsLookup } from "dns/promises";
+import net from "net";
+import { gzipSync } from "zlib";
 import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
 import {
   DEFAULT_TRANSLATION_SETTINGS,
@@ -17,6 +20,42 @@ const __dirname = path.dirname(__filename);
 const PORT = Number(process.env.PORT) || 3000;
 const PRIMARY_MODEL = "gemini-4-hydrogen";
 const FALLBACK_MODEL = "gemini-3.1-flash-lite";
+const TARGET_LANG_MAP = new Map(TARGET_LANGUAGES.map((l) => [l.code, l]));
+
+class FastTtlCache<T> {
+  private store = new Map<string, { value: T; expiresAt: number }>();
+  constructor(private maxEntries = 800) {}
+
+  get(key: string): T | undefined {
+    const entry = this.store.get(key);
+    if (!entry) return undefined;
+    if (Date.now() > entry.expiresAt) {
+      this.store.delete(key);
+      return undefined;
+    }
+    // Refresh recency (LRU)
+    this.store.delete(key);
+    this.store.set(key, entry);
+    return entry.value;
+  }
+
+  set(key: string, value: T, ttlMs: number): void {
+    if (this.store.has(key)) this.store.delete(key);
+    this.store.set(key, { value, expiresAt: Date.now() + ttlMs });
+    if (this.store.size > this.maxEntries) {
+      const oldestKey = this.store.keys().next().value;
+      if (oldestKey !== undefined) this.store.delete(oldestKey);
+    }
+  }
+}
+
+const neutralSingleCache = new FastTtlCache<{ text: string; usageMetadata?: any }>(1200);
+const filenameSuggestCache = new FastTtlCache<any>(250);
+const mediaLookupCache = new FastTtlCache<any>(250);
+const remoteSubtitleCache = new FastTtlCache<string>(100);
+
+let cachedAiClient: GoogleGenAI | null = null;
+let cachedAiKey = "";
 
 function normalizeServerModel(model?: string): string {
   const m = String(model || "").trim();
@@ -42,7 +81,11 @@ function getAiClient(): GoogleGenAI {
     err.statusCode = 503;
     throw err;
   }
-  return new GoogleGenAI({
+  if (cachedAiClient && cachedAiKey === apiKey) {
+    return cachedAiClient;
+  }
+  cachedAiKey = apiKey;
+  cachedAiClient = new GoogleGenAI({
     apiKey,
     httpOptions: {
       headers: {
@@ -50,13 +93,13 @@ function getAiClient(): GoogleGenAI {
       },
     },
   });
+  return cachedAiClient;
 }
 
 function stripFormattingServer(text: string): string {
   if (!text) return "";
   return text
-    .replace(/\{\\[^}]+\}/g, "")
-    .replace(/<[^>]+>/g, "")
+    .replace(/\{\\[^}]+\}|<[^>]+>/g, "")
     .trim();
 }
 
@@ -122,7 +165,7 @@ async function callWithRetry<T>(
   primaryModel: string,
   fn: (model: string, attemptSignal: AbortSignal) => Promise<T>,
   retries = 3,
-  delayMs = 800,
+  delayMs = 250,
   clientSignal?: AbortSignal,
   primaryTimeoutMs = 15000,
   fallbackTimeoutMs = 60000
@@ -275,7 +318,7 @@ function sendApiError(res: Response, err: any) {
 
 function buildNeutralPrompt(cleanText: string, settings?: TranslationSettings): string {
   let promptInstruction = `Translate the following text to Urdu literally and neutrally, like a standard machine translation: "${cleanText}"`;
-  const langObj = TARGET_LANGUAGES.find((l) => l.code === settings?.targetLanguage);
+  const langObj = settings?.targetLanguage ? TARGET_LANG_MAP.get(settings.targetLanguage) : undefined;
   const langName = langObj ? langObj.name : "Urdu";
 
   if (settings?.scriptMode === "roman-urdu") {
@@ -299,6 +342,8 @@ function buildNeutralPrompt(cleanText: string, settings?: TranslationSettings): 
 
 async function startServer() {
   const app = express();
+  app.set("etag", "strong");
+  app.disable("x-powered-by");
 
   app.use("/api", (req: Request, res: Response, next: NextFunction) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -308,6 +353,26 @@ async function startServer() {
       res.status(204).end();
       return;
     }
+
+    // Fast transparent gzip compression for JSON API payloads >= 1KB
+    const acceptEnc = String(req.headers["accept-encoding"] || "");
+    if (/\bgzip\b/i.test(acceptEnc) && !req.path.endsWith("/stream")) {
+      const origJson = res.json.bind(res);
+      res.json = ((body: any) => {
+        if (res.headersSent) return origJson(body);
+        const raw = JSON.stringify(body);
+        if (raw.length >= 1024) {
+          const gz = gzipSync(raw, { level: 1 });
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.setHeader("Content-Encoding", "gzip");
+          res.setHeader("Vary", "Accept-Encoding");
+          res.setHeader("Content-Length", String(gz.byteLength));
+          return res.send(gz);
+        }
+        return origJson(body);
+      }) as Response["json"];
+    }
+
     next();
   });
 
@@ -369,7 +434,14 @@ async function startServer() {
         return;
       }
 
-      const upstream = await fetch(parsed.toString(), {
+      const cacheKey = parsed.toString();
+      const cached = remoteSubtitleCache.get(cacheKey);
+      if (cached !== undefined) {
+        res.json({ content: cached });
+        return;
+      }
+
+      const upstream = await fetch(cacheKey, {
         signal: AbortSignal.timeout(15000),
         headers: { "User-Agent": "UrduSubtitlesLocalizer/1.0" },
       });
@@ -384,6 +456,7 @@ async function startServer() {
         res.status(413).json({ error: "Remote subtitle file exceeds 5MB limit." });
         return;
       }
+      remoteSubtitleCache.set(cacheKey, content, 60_000);
       res.json({ content });
     } catch (err: any) {
       res.status(502).json({
@@ -795,7 +868,7 @@ Structure your response with clear, elegant markdown headers, bullet points, and
           };
         },
         3,
-        800,
+        250,
         signal,
         12000,
         60000
@@ -813,6 +886,13 @@ Structure your response with clear, elegant markdown headers, bullet points, and
     try {
       const { text = "", settings } = req.body || {};
       const cleanText = stripFormattingServer(String(text));
+      const cacheKey = `${settings?.targetLanguage || "ur"}:${settings?.scriptMode || "urdu-script"}:${cleanText}`;
+      const cached = cleanText ? neutralSingleCache.get(cacheKey) : undefined;
+      if (cached) {
+        res.json(cached);
+        return;
+      }
+
       const ai = getAiClient();
 
       const data = await callWithRetry(
@@ -836,12 +916,15 @@ Structure your response with clear, elegant markdown headers, bullet points, and
           };
         },
         3,
-        600,
+        200,
         signal,
         15000,
         15000
       );
 
+      if (cleanText && data.text) {
+        neutralSingleCache.set(cacheKey, data, 10 * 60_000);
+      }
       res.json(data);
     } catch (err) {
       sendApiError(res, err);
@@ -864,7 +947,7 @@ Structure your response with clear, elegant markdown headers, bullet points, and
         text: stripFormattingServer(String(item.text || "")),
       }));
 
-      const langObj = TARGET_LANGUAGES.find((l) => l.code === settings?.targetLanguage);
+      const langObj = settings?.targetLanguage ? TARGET_LANG_MAP.get(settings.targetLanguage) : undefined;
       const langName = langObj ? langObj.name : "Urdu";
       const targetDesc =
         settings?.scriptMode === "roman-urdu"
@@ -927,7 +1010,7 @@ Structure your response with clear, elegant markdown headers, bullet points, and
             }));
           },
           2,
-          600,
+          200,
           signal,
           20000,
           20000
@@ -943,10 +1026,10 @@ Structure your response with clear, elegant markdown headers, bullet points, and
         console.warn("Structured neutral-batch failed, falling back to bounded concurrency:", batchErr?.message);
       }
 
-      // Bounded concurrency fallback (max 3 concurrent) with graceful per-item recovery
+      // Bounded concurrency fallback (max 6 concurrent) with graceful per-item recovery
       const results: { index: number; googleTranslateText: string }[] = new Array(cleanItems.length);
       let cursor = 0;
-      const workerCount = Math.min(3, cleanItems.length);
+      const workerCount = Math.min(6, cleanItems.length);
       await Promise.all(
         Array.from({ length: workerCount }, async () => {
           while (cursor < cleanItems.length && !signal.aborted) {
@@ -969,7 +1052,7 @@ Structure your response with clear, elegant markdown headers, bullet points, and
                     attemptSignal
                   ),
                 2,
-                600,
+                200,
                 signal,
                 15000,
                 15000
@@ -994,6 +1077,530 @@ Structure your response with clear, elegant markdown headers, bullet points, and
     }
   });
 
+  // Suggest short, clean movie/series filename via Gemini + Google Search grounding
+  app.post("/api/gemini/suggest-filename", async (req: Request, res: Response) => {
+    const signal = createRequestAbortSignal(res);
+    try {
+      const { rawFileName = "", context = "", sampleLines = "", model = PRIMARY_MODEL } = req.body || {};
+      const ai = getAiClient();
+
+      const cleanedRaw = String(rawFileName || "").trim().slice(0, 220);
+      const cleanedContext = stripFormattingServer(String(context || "")).slice(0, 1200);
+      const cleanedSample = stripFormattingServer(String(sampleLines || "")).slice(0, 1200);
+
+      if (!cleanedRaw && !cleanedContext && !cleanedSample) {
+        res.status(400).json({ error: "Provide filename, context, or sample dialogue to suggest a title." });
+        return;
+      }
+
+      const suggestCacheKey = `${normalizeServerModel(model)}:${cleanedRaw}:${cleanedContext.slice(0, 200)}`;
+      const cachedSuggest = filenameSuggestCache.get(suggestCacheKey);
+      if (cachedSuggest) {
+        res.json(cachedSuggest);
+        return;
+      }
+
+      const prompt = `Identify the official movie, drama, anime, or TV series title (and release year or season/episode numerals like 2024, S01E02, S1E1, S01, E01, Season 1, Episode 2, or 1 2 3 if present) from the clues below, and suggest 3 clean base filenames (do NOT include .srt extension or language tags).
+
+Clues:
+- Original File Name: ${cleanedRaw || "unknown"}
+- Cultural Context: ${cleanedContext || "none"}
+- Sample Dialogue: ${cleanedSample || "none"}
+
+Rules:
+- Remove extra dots (.), underscores (_), brackets, parentheses, and extra symbols.
+- Keep the release year (e.g. 2024) and all season/episode numerals (e.g. S01E02, S1E1, S01, E01, Season 1, Episode 2, 1, 2, 3).
+- Strip release tags (1080p, BluRay, WEB-DL, x265, YTS, etc.).
+- No invalid filename characters (no \\ / : * ? " < > |).
+- Output ONLY a JSON object in plain text with shape: {"primary":"...","alternatives":["...","..."]}`;
+
+      const parseSuggestions = (rawText: string) => {
+        const cleaned = rawText
+          .replace(/^```json\s*/i, "")
+          .replace(/^```\s*/i, "")
+          .replace(/```$/i, "")
+          .trim();
+        const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+        const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : cleaned);
+        const sanitize = (s: unknown) =>
+          String(s || "")
+            .replace(/\.(srt|vtt|ass|ssa|sbv|lrc|txt|json)$/i, "")
+            .replace(/[._~+=|`\\/:*?"<>!@#$%^&,;(){}\[\]]+/g, " ")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 72);
+        const primary = sanitize(parsed?.primary);
+        const altsRaw: unknown[] = Array.isArray(parsed?.alternatives) ? parsed.alternatives : [];
+        const alternatives = Array.from(
+          new Set(altsRaw.map(sanitize).filter((v) => v && v !== primary))
+        ).slice(0, 3);
+        return { primary, alternatives };
+      };
+
+      const result = await callWithRetry(
+        model,
+        async (activeModel, attemptSignal) => {
+          const thinkingConfig = /^gemini-(3|4)/i.test(activeModel)
+            ? { thinkingLevel: ThinkingLevel.LOW }
+            : undefined;
+
+          let usedSearch = false;
+          let response;
+          const searchSub = createSubTimeoutSignal(attemptSignal, 6500);
+          try {
+            response = await raceWithAbort(
+              ai.models.generateContent({
+                model: activeModel,
+                contents: prompt,
+                config: {
+                  ...(thinkingConfig ? { thinkingConfig } : {}),
+                  tools: [{ googleSearch: {} }],
+                  abortSignal: searchSub.signal,
+                },
+              }),
+              searchSub.signal
+            );
+            usedSearch = Boolean(response?.text?.trim());
+          } catch (searchErr: any) {
+            if (signal.aborted || attemptSignal.aborted || searchErr?.isAttemptTimeout) {
+              throw searchErr;
+            }
+          } finally {
+            searchSub.cleanup();
+          }
+
+          if (!response?.text?.trim()) {
+            if (attemptSignal.aborted) {
+              throw new Error("Attempt timed out");
+            }
+            response = await raceWithAbort(
+              ai.models.generateContent({
+                model: activeModel,
+                contents: prompt,
+                config: {
+                  ...(thinkingConfig ? { thinkingConfig } : {}),
+                  abortSignal: attemptSignal,
+                },
+              }),
+              attemptSignal
+            );
+          }
+
+          const rawText = (response?.text || "").trim();
+          const parsed = parseSuggestions(rawText);
+          if (!parsed.primary) {
+            throw new Error("Could not parse filename suggestion.");
+          }
+          return {
+            primary: parsed.primary,
+            alternatives: parsed.alternatives,
+            usedSearch,
+            usageMetadata: response?.usageMetadata,
+          };
+        },
+        2,
+        250,
+        signal,
+        12000,
+        25000
+      );
+
+      filenameSuggestCache.set(suggestCacheKey, result, 5 * 60_000);
+      res.json(result);
+    } catch (err) {
+      sendApiError(res, err);
+    }
+  });
+
+  // Load Movie or Season/Episode Details from Google, IMDb, or Custom Address (SSRF-hardened)
+  app.post("/api/media/lookup", async (req: Request, res: Response) => {
+    const signal = createRequestAbortSignal(res);
+    try {
+      const {
+        source = "google",
+        query = "",
+        customUrl = "",
+        seasonEpisode = "",
+        model = PRIMARY_MODEL,
+      } = req.body || {};
+
+      const cleanQuery = String(query || "").trim().slice(0, 240);
+      const cleanSeasonEp = String(seasonEpisode || "").trim().slice(0, 60);
+      const cleanCustomUrl = String(customUrl || "").trim().slice(0, 1000);
+      const lookupCacheKey = `${source}:${cleanQuery.toLowerCase()}:${cleanSeasonEp.toLowerCase()}:${cleanCustomUrl}`;
+      const cachedLookup = mediaLookupCache.get(lookupCacheKey);
+      if (cachedLookup) {
+        res.json(cachedLookup);
+        return;
+      }
+
+      const isPrivateOrReservedIp = (ip: string): boolean => {
+        if (net.isIPv4(ip)) {
+          const parts = ip.split(".").map(Number);
+          if (parts.length !== 4) return true;
+          const [a, b] = parts;
+          if (a === 0 || a === 10 || a === 127) return true;
+          if (a === 169 && b === 254) return true;
+          if (a === 172 && b >= 16 && b <= 31) return true;
+          if (a === 192 && b === 168) return true;
+          if (a === 100 && b >= 64 && b <= 127) return true;
+          if (a >= 224) return true;
+          return false;
+        }
+        if (net.isIPv6(ip)) {
+          const low = ip.toLowerCase();
+          if (
+            low === "::1" ||
+            low === "::" ||
+            low.startsWith("fe80:") ||
+            low.startsWith("fc") ||
+            low.startsWith("fd") ||
+            low.startsWith("::ffff:127.") ||
+            low.startsWith("::ffff:10.") ||
+            low.startsWith("::ffff:169.254.") ||
+            low.startsWith("::ffff:192.168.")
+          ) {
+            return true;
+          }
+          return false;
+        }
+        return true;
+      };
+
+      const validateAndFetchPublicUrl = async (rawUrl: string): Promise<{ finalUrl: string; bodyText: string; contentType: string }> => {
+        let parsed: URL;
+        try {
+          parsed = new URL(rawUrl);
+        } catch {
+          throw Object.assign(new Error("Invalid URL format."), { statusCode: 400 });
+        }
+        if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+          throw Object.assign(new Error("Only http:// or https:// URLs are allowed."), { statusCode: 400 });
+        }
+        const host = parsed.hostname.toLowerCase();
+        if (!host || host === "localhost" || host.endsWith(".local") || host.endsWith(".internal")) {
+          throw Object.assign(new Error("Local or internal hostnames are blocked."), { statusCode: 400 });
+        }
+        if (net.isIP(host)) {
+          if (isPrivateOrReservedIp(host)) {
+            throw Object.assign(new Error("Private or reserved IP addresses are blocked."), { statusCode: 400 });
+          }
+        } else {
+          const resolvedAddrs = await dnsLookup(host, { all: true }).catch(() => []);
+          if (!resolvedAddrs.length || resolvedAddrs.some((entry) => isPrivateOrReservedIp(entry.address))) {
+            throw Object.assign(new Error("Host resolves to a private/unreachable IP."), { statusCode: 400 });
+          }
+        }
+
+        const resp = await fetch(parsed.toString(), {
+          method: "GET",
+          redirect: "manual",
+          headers: {
+            "User-Agent": "Mozilla/5.0 (compatible; UrduLocalizerMediaLookup/1.0)",
+            Accept: "text/html,application/json,text/plain",
+          },
+          signal: AbortSignal.any
+            ? AbortSignal.any([signal, AbortSignal.timeout(10000)])
+            : AbortSignal.timeout(10000),
+        });
+
+        if (resp.status >= 300 && resp.status < 400) {
+          throw Object.assign(new Error("Redirected URL blocked for safety; enter the direct destination page URL."), { statusCode: 400 });
+        }
+        if (!resp.ok) {
+          throw Object.assign(new Error(`Remote page returned HTTP ${resp.status}.`), { statusCode: 502 });
+        }
+
+        const reader = resp.body?.getReader();
+        if (!reader) {
+          const text = (await resp.text()).slice(0, 512000);
+          return { finalUrl: parsed.toString(), bodyText: text, contentType: resp.headers.get("content-type") || "" };
+        }
+        const chunks: Uint8Array[] = [];
+        let totalBytes = 0;
+        const MAX_BYTES = 512000;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value) {
+            totalBytes += value.byteLength;
+            chunks.push(value);
+            if (totalBytes >= MAX_BYTES) {
+              await reader.cancel().catch(() => {});
+              break;
+            }
+          }
+        }
+        const merged = new Uint8Array(chunks.reduce((sum, c) => sum + c.byteLength, 0));
+        let offset = 0;
+        for (const c of chunks) {
+          merged.set(c, offset);
+          offset += c.byteLength;
+        }
+        return {
+          finalUrl: parsed.toString(),
+          bodyText: new TextDecoder("utf-8", { fatal: false }).decode(merged),
+          contentType: resp.headers.get("content-type") || "",
+        };
+      };
+
+      const extractMetadataFromHtml = (html: string, url: string) => {
+        const decodeEntities = (s: string) =>
+          s
+            .replace(/&amp;/g, "&")
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;|&apos;/g, "'")
+            .replace(/&lt;/g, "<")
+            .replace(/&gt;/g, ">")
+            .replace(/\s+/g, " ")
+            .trim();
+
+        let jsonLdData: any = null;
+        const ldMatches = html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi);
+        for (const match of ldMatches) {
+          try {
+            const parsed = JSON.parse(match[1].trim());
+            const candidate = Array.isArray(parsed) ? parsed[0] : parsed;
+            if (candidate && (candidate["@type"] === "Movie" || candidate["@type"] === "TVSeries" || candidate["@type"] === "TVEpisode" || candidate.name)) {
+              jsonLdData = candidate;
+              break;
+            }
+          } catch {
+            // ignore malformed JSON-LD
+          }
+        }
+
+        const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+        const ogTitleMatch = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
+          || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i);
+        const ogDescMatch = html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i)
+          || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:description["']/i);
+        const metaDescMatch = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i)
+          || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']description["']/i);
+
+        const rawTitle = decodeEntities(
+          String(jsonLdData?.name || ogTitleMatch?.[1] || titleMatch?.[1] || "")
+        )
+          .replace(/\s*[-|–]\s*(IMDb|Wikipedia|TMDB|Rotten Tomatoes).*$/i, "")
+          .trim();
+
+        const yearCandidate =
+          String(jsonLdData?.datePublished || rawTitle || "").match(/\b(19\d{2}|20[0-3]\d)\b/)?.[1] || "";
+
+        const description = decodeEntities(
+          String(jsonLdData?.description || ogDescMatch?.[1] || metaDescMatch?.[1] || "")
+        );
+
+        const genres = Array.isArray(jsonLdData?.genre)
+          ? jsonLdData.genre.join(", ")
+          : typeof jsonLdData?.genre === "string"
+          ? jsonLdData.genre
+          : "";
+
+        const actors = Array.isArray(jsonLdData?.actor)
+          ? jsonLdData.actor.slice(0, 6).map((a: any) => a?.name).filter(Boolean).join(", ")
+          : "";
+
+        const strippedBody = decodeEntities(
+          html
+            .replace(/<script[\s\S]*?<\/script>/gi, " ")
+            .replace(/<style[\s\S]*?<\/style>/gi, " ")
+            .replace(/<[^>]+>/g, " ")
+        ).slice(0, 1800);
+
+        return {
+          title: rawTitle,
+          year: yearCandidate,
+          genres,
+          cast: actors,
+          plotSummary: description || strippedBody.slice(0, 500),
+          sourceUrl: url,
+          rawSnippet: strippedBody,
+        };
+      };
+
+      if (source === "custom") {
+        if (!cleanCustomUrl) {
+          res.status(400).json({ error: "Enter a custom HTTPS web address." });
+          return;
+        }
+        const fetched = await validateAndFetchPublicUrl(cleanCustomUrl);
+        if (fetched.contentType.includes("application/json")) {
+          const parsedJson = JSON.parse(fetched.bodyText);
+          const title = String(parsedJson?.title || parsedJson?.name || parsedJson?.original_title || "").trim();
+          const year = String(parsedJson?.year || parsedJson?.release_date || "").match(/\b(19\d{2}|20[0-3]\d)\b/)?.[1] || "";
+          const plotSummary = String(parsedJson?.overview || parsedJson?.plot || parsedJson?.description || "").trim();
+          res.json({
+            title: title || cleanQuery || "Subtitles",
+            year,
+            seasonOrEpisode: cleanSeasonEp,
+            genres: Array.isArray(parsedJson?.genres) ? parsedJson.genres.map((g: any) => g?.name || g).join(", ") : String(parsedJson?.genre || ""),
+            cast: String(parsedJson?.cast || parsedJson?.actors || ""),
+            plotSummary,
+            sourceLabel: "Custom JSON Address",
+            sourceUrl: fetched.finalUrl,
+          });
+          return;
+        }
+        const extracted = extractMetadataFromHtml(fetched.bodyText, fetched.finalUrl);
+        res.json({
+          title: extracted.title || cleanQuery || "Subtitles",
+          year: extracted.year,
+          seasonOrEpisode: cleanSeasonEp,
+          genres: extracted.genres,
+          cast: extracted.cast,
+          plotSummary: extracted.plotSummary,
+          sourceLabel: "Custom Web Address",
+          sourceUrl: fetched.finalUrl,
+        });
+        return;
+      }
+
+      if (source === "imdb") {
+        const imdbIdMatch = (cleanCustomUrl || cleanQuery).match(/\b(tt\d{6,10})\b/i);
+        let imdbId = imdbIdMatch ? imdbIdMatch[1].toLowerCase() : "";
+        let suggestionTitle = "";
+        let suggestionYear = "";
+        let suggestionCast = "";
+        let suggestionType = "";
+
+        if (!imdbId && cleanQuery) {
+          const qSlug = encodeURIComponent(cleanQuery.toLowerCase());
+          const firstChar = cleanQuery.trim().toLowerCase().replace(/[^a-z0-9]/g, "")[0] || "x";
+          const sugResp = await fetch(
+            `https://v3.sg.media-imdb.com/suggestion/${firstChar}/${qSlug}.json`,
+            {
+              headers: { "User-Agent": "Mozilla/5.0" },
+              signal: AbortSignal.any
+                ? AbortSignal.any([signal, AbortSignal.timeout(8000)])
+                : AbortSignal.timeout(8000),
+            }
+          ).catch(() => null);
+          if (sugResp && sugResp.ok) {
+            const sugData: any = await sugResp.json().catch(() => null);
+            const firstHit = Array.isArray(sugData?.d)
+              ? sugData.d.find((item: any) => typeof item?.id === "string" && item.id.startsWith("tt")) || sugData.d[0]
+              : null;
+            if (firstHit) {
+              imdbId = String(firstHit.id || "");
+              suggestionTitle = String(firstHit.l || "");
+              suggestionYear = firstHit.y ? String(firstHit.y) : "";
+              suggestionCast = String(firstHit.s || "");
+              suggestionType = String(firstHit.q || firstHit.qid || "");
+            }
+          }
+        }
+
+        if (imdbId && /^tt\d{6,10}$/i.test(imdbId)) {
+          const imdbPageUrl = `https://www.imdb.com/title/${imdbId}/`;
+          try {
+            const fetched = await validateAndFetchPublicUrl(imdbPageUrl);
+            const extracted = extractMetadataFromHtml(fetched.bodyText, imdbPageUrl);
+            res.json({
+              title: extracted.title || suggestionTitle || cleanQuery,
+              year: extracted.year || suggestionYear,
+              seasonOrEpisode: cleanSeasonEp,
+              genres: extracted.genres || suggestionType,
+              cast: extracted.cast || suggestionCast,
+              plotSummary: extracted.plotSummary,
+              sourceLabel: `IMDb (${imdbId})`,
+              sourceUrl: imdbPageUrl,
+            });
+            return;
+          } catch {
+            if (suggestionTitle) {
+              res.json({
+                title: suggestionTitle,
+                year: suggestionYear,
+                seasonOrEpisode: cleanSeasonEp,
+                genres: suggestionType,
+                cast: suggestionCast,
+                plotSummary: `IMDb entry ${imdbId}${suggestionCast ? ` starring ${suggestionCast}` : ""}.`,
+                sourceLabel: `IMDb (${imdbId})`,
+                sourceUrl: imdbPageUrl,
+              });
+              return;
+            }
+          }
+        }
+        // Fallback to Gemini Search scoped to IMDb if direct IMDb API/HTML yielded nothing
+      }
+
+      // Google (and IMDb fallback) via Gemini + Google Search Grounding
+      const ai = getAiClient();
+      const targetQuery = [cleanQuery, cleanSeasonEp].filter(Boolean).join(" ");
+      if (!targetQuery) {
+        res.status(400).json({ error: "Enter a movie or series title to search." });
+        return;
+      }
+
+      const searchScope =
+        source === "imdb"
+          ? `Look up the official IMDb details for "${targetQuery}".`
+          : `Look up official movie, series, or season/episode details on Google for "${targetQuery}".`;
+
+      const lookupPrompt = `${searchScope}
+Return ONLY valid JSON with these exact keys:
+{
+  "title": "Official clean English/localized title without extra dots or symbols",
+  "year": "4-digit release year or empty string",
+  "seasonOrEpisode": "Season or episode code/label if applicable (e.g. Season 2, S01E03) or empty string",
+  "genres": "Comma-separated genres",
+  "cast": "Key main cast / characters",
+  "plotSummary": "Concise 2-4 sentence synopsis, tone, and character relationship notes useful for Urdu subtitle translation",
+  "sourceUrl": "Official Google/IMDb/Wikipedia reference URL if known"
+}`;
+
+      const result = await callWithRetry(
+        model,
+        async (activeModel, attemptSignal) => {
+          const thinkingConfig = /^gemini-(3|4)/i.test(activeModel)
+            ? { thinkingLevel: ThinkingLevel.LOW }
+            : undefined;
+          const resp = await raceWithAbort(
+            ai.models.generateContent({
+              model: activeModel,
+              contents: lookupPrompt,
+              config: {
+                ...(thinkingConfig ? { thinkingConfig } : {}),
+                tools: [{ googleSearch: {} }],
+                abortSignal: attemptSignal,
+              },
+            }),
+            attemptSignal
+          );
+          const raw = (resp?.text || "")
+            .replace(/^```json\s*/i, "")
+            .replace(/^```\s*/i, "")
+            .replace(/```$/i, "")
+            .trim();
+          const match = raw.match(/\{[\s\S]*\}/);
+          const parsed = JSON.parse(match ? match[0] : raw);
+          return {
+            title: String(parsed?.title || cleanQuery).trim(),
+            year: String(parsed?.year || "").trim(),
+            seasonOrEpisode: String(parsed?.seasonOrEpisode || cleanSeasonEp).trim(),
+            genres: String(parsed?.genres || "").trim(),
+            cast: String(parsed?.cast || "").trim(),
+            plotSummary: String(parsed?.plotSummary || "").trim(),
+            sourceLabel: source === "imdb" ? "IMDb via Google Search" : "Google Search + Gemini",
+            sourceUrl: String(parsed?.sourceUrl || "").trim(),
+          };
+        },
+        2,
+        600,
+        signal,
+        14000,
+        25000
+      );
+
+      mediaLookupCache.set(lookupCacheKey, result, 10 * 60_000);
+      res.json(result);
+    } catch (err) {
+      sendApiError(res, err);
+    }
+  });
+
   // Catch-all JSON 404 for unknown API routes so SPA fallback never returns HTML
   app.all("/api/*", (_req: Request, res: Response) => {
     res.status(404).json({ error: "API endpoint not found." });
@@ -1008,6 +1615,13 @@ Structure your response with clear, elegant markdown headers, bullet points, and
     app.use(vite.middlewares);
   } else {
     const distDir = path.join(__dirname, "dist");
+    app.use(
+      "/assets",
+      express.static(path.join(distDir, "assets"), {
+        maxAge: "1y",
+        immutable: true,
+      })
+    );
     app.use(express.static(distDir));
     app.get("*", (_req: Request, res: Response) => {
       res.sendFile(path.join(distDir, "index.html"));
@@ -1017,6 +1631,8 @@ Structure your response with clear, elegant markdown headers, bullet points, and
   const server = app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server listening on http://0.0.0.0:${PORT}`);
   });
+  server.keepAliveTimeout = 65_000;
+  server.headersTimeout = 66_000;
 
   const shutdown = () => {
     server.close(() => process.exit(0));

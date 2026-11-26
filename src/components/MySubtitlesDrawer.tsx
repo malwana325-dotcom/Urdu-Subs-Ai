@@ -17,6 +17,7 @@ import { isNativeAndroid } from '../services/androidNative';
 import { InfoPopover } from './InfoPopover';
 import { RightEdgeDrawerShell } from './RightEdgeDrawerShell';
 import { cn } from '../utils/cn';
+import { deriveStoredFileTags, getDisplayStoredFileTitle } from '../utils/projectTags';
 
 const SUBTITLE_EXTENSIONS = ['.srt', '.vtt', '.ass', '.ssa', '.sbv', '.lrc', '.json', '.txt'];
 
@@ -86,6 +87,14 @@ export const MySubtitlesDrawer: React.FC<MySubtitlesDrawerProps> = ({
     }
   }, [isOpen, loadCachedFiles]);
 
+  useEffect(() => {
+    const onChanged = () => {
+      void loadCachedFiles();
+    };
+    window.addEventListener('urduLocalizerMySubtitlesChanged', onChanged);
+    return () => window.removeEventListener('urduLocalizerMySubtitlesChanged', onChanged);
+  }, [loadCachedFiles]);
+
   const scanDirectoryHandle = useCallback(
     async (rootHandle: any, replaceExisting = true): Promise<StoredSubtitleFile[]> => {
       let targetHandle = rootHandle;
@@ -148,6 +157,7 @@ export const MySubtitlesDrawer: React.FC<MySubtitlesDrawerProps> = ({
       setHasSavedHandle(true);
       setFolderLabel(resolvedFolderName);
       setFiles(collected);
+      window.dispatchEvent(new CustomEvent('urduLocalizerMySubtitlesChanged'));
       return collected;
     },
     []
@@ -264,6 +274,7 @@ export const MySubtitlesDrawer: React.FC<MySubtitlesDrawerProps> = ({
       setFolderLabel(detectedFolder);
       setStatusMessage(`Added ${stored.length} subtitle file(s) to ${detectedFolder}.`);
       onNotify?.(`Added ${stored.length} file(s) to ${detectedFolder}`, 'success');
+      window.dispatchEvent(new CustomEvent('urduLocalizerMySubtitlesChanged'));
     } catch {
       setStatusMessage('Unable to read selected subtitle files.');
     } finally {
@@ -285,6 +296,7 @@ export const MySubtitlesDrawer: React.FC<MySubtitlesDrawerProps> = ({
       await dbService.deleteMySubtitleFile(id);
       setFiles((prev) => prev.filter((f) => f.id !== id));
       setConfirmRemoveId(null);
+      window.dispatchEvent(new CustomEvent('urduLocalizerMySubtitlesChanged'));
       onNotify?.('Removed file from My Subtitles list', 'success');
     } else {
       setConfirmRemoveId(id);
@@ -295,21 +307,27 @@ export const MySubtitlesDrawer: React.FC<MySubtitlesDrawerProps> = ({
   const filteredFiles = files.filter((f) => {
     if (!searchQuery.trim()) return true;
     const q = searchQuery.toLowerCase();
-    return f.name.toLowerCase().includes(q) || f.relativePath.toLowerCase().includes(q);
+    const display = getDisplayStoredFileTitle(f).toLowerCase();
+    return (
+      display.includes(q) ||
+      f.name.toLowerCase().includes(q) ||
+      f.relativePath.toLowerCase().includes(q) ||
+      deriveStoredFileTags(f).some((t) => t.toLowerCase().includes(q))
+    );
   });
 
   return (
-    <RightEdgeDrawerShell isOpen={isOpen} onClose={onClose} widthClass="w-[min(92vw,370px)]">
+    <RightEdgeDrawerShell isOpen={isOpen} onClose={onClose} widthClass="w-[min(92vw,370px)]" roleVariant="info">
         {/* Header */}
         <div
-          className="px-3 py-2.5 border-b flex items-center justify-between gap-2 shrink-0"
+          className="px-3 py-2.5 border-b flex items-center justify-between gap-2 shrink-0 mc-popup-header"
           style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
         >
           <div className="flex items-center gap-2 min-w-0">
-            <FolderOpen size={16} style={{ color: 'var(--theme-accent)' }} className="shrink-0" />
+            <FolderOpen size={16} style={{ color: 'var(--theme-accent)' }} className="shrink-0 mc-popup-title" />
             <div className="min-w-0">
               <div className="flex items-center gap-1">
-                <h2 className="text-xs font-semibold truncate">{folderLabel}</h2>
+                <h2 className="text-xs font-semibold truncate mc-popup-title">{folderLabel}</h2>
                 <InfoPopover
                   title="My Subtitles Folder"
                   description="Browse and load subtitle files stored in your My Subtitles folder on device storage or offline cache."
@@ -442,7 +460,10 @@ export const MySubtitlesDrawer: React.FC<MySubtitlesDrawerProps> = ({
               </p>
             </div>
           ) : (
-            filteredFiles.map((file) => (
+            filteredFiles.map((file) => {
+              const displayTitle = getDisplayStoredFileTitle(file);
+              const fileTags = deriveStoredFileTags(file);
+              return (
               <div
                 key={file.id}
                 className="rounded-lg border p-2 flex items-center justify-between gap-2"
@@ -450,14 +471,38 @@ export const MySubtitlesDrawer: React.FC<MySubtitlesDrawerProps> = ({
               >
                 <div className="flex items-start gap-2 min-w-0 flex-1">
                   <FileText size={14} style={{ color: 'var(--theme-accent)' }} className="shrink-0 mt-0.5" />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs font-semibold truncate" title={file.relativePath}>
-                      {file.name}
+                  <div className="min-w-0 flex-1 space-y-0.5">
+                    <p className="text-xs font-semibold truncate" title={file.name}>
+                      {displayTitle}
                     </p>
                     <p className="text-[10px] opacity-60 font-mono tabular-nums truncate">
                       {file.format} · {formatBytes(file.sizeBytes)}
-                      {file.relativePath !== file.name ? ` · ${file.relativePath}` : ''}
+                      {file.subFolder ? ` · ${file.subFolder}` : file.relativePath !== file.name ? ` · ${file.relativePath}` : ''}
                     </p>
+                    {fileTags.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-1 pt-0.5">
+                        {fileTags.slice(0, 4).map((t) => (
+                          <span
+                            key={t}
+                            className={cn(
+                              'px-1.5 py-0.5 rounded text-[9px] font-semibold border',
+                              t === 'Completed' || t === 'Exported'
+                                ? 'bg-emerald-500/15 text-emerald-500 border-emerald-500/30'
+                                : t === 'Incomplete'
+                                ? 'bg-red-500/15 text-red-500 border-red-500/30'
+                                : 'opacity-75'
+                            )}
+                            style={
+                              t === 'Completed' || t === 'Exported' || t === 'Incomplete'
+                                ? undefined
+                                : { backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }
+                            }
+                          >
+                            {t}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -488,7 +533,8 @@ export const MySubtitlesDrawer: React.FC<MySubtitlesDrawerProps> = ({
                   </button>
                 </div>
               </div>
-            ))
+              );
+            })
           )}
         </div>
     </RightEdgeDrawerShell>

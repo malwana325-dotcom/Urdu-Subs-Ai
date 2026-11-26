@@ -201,6 +201,73 @@ export function hasFormatting(text: string): boolean {
   return /<font[^>]*>|<b\b|<i\b|<u\b|\{\\/i.test(text);
 }
 
+/**
+ * Converts formatted subtitle text (with HTML/color/ASS tags) into clean plain text
+ * for direct inline editing in the Workspace, preserving explicit line breaks.
+ */
+export function toCleanEditableText(raw: string): string {
+  if (!raw) return '';
+  return raw
+    .replace(/\\N/gi, '\n')
+    .replace(/\\h/gi, ' ')
+    .replace(/\{\\[^}]*\}/g, '')
+    .replace(/<\/?(?:font|b|i|u|strong|em|span|color)[^>]*>/gi, '')
+    .replace(/<[^>]+>/g, '');
+}
+
+/**
+ * Re-applies original color & formatting tags onto plain dialogue text edited inline
+ * so direct workspace editing never exposes raw tags and never destroys subtitle styling.
+ */
+export function reapplyFormattingTemplate(rawOriginal: string, editedPlainText: string): string {
+  if (!editedPlainText) return '';
+  if (!rawOriginal || !hasFormatting(rawOriginal)) return editedPlainText;
+
+  // Preserve leading ASS override block (e.g. {\an8} or {\c&H...&})
+  const assPrefixMatch = rawOriginal.match(/^((?:\{\\[^}]*\})+)/);
+  const assPrefix = assPrefixMatch ? assPrefixMatch[1] : '';
+
+  const hadBold = /<b\b[^>]*>/i.test(rawOriginal);
+  const hadItalic = /<i\b[^>]*>/i.test(rawOriginal);
+  const hadUnderline = /<u\b[^>]*>/i.test(rawOriginal);
+
+  const fontColors: string[] = [];
+  const colorRegex = /<font[^>]*color=["']([^"']+)["'][^>]*>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = colorRegex.exec(rawOriginal)) !== null) {
+    if (match[1]) fontColors.push(match[1]);
+  }
+
+  let formatted = editedPlainText;
+
+  if (fontColors.length === 1) {
+    formatted = `<font color="${fontColors[0]}">${formatted}</font>`;
+  } else if (fontColors.length > 1) {
+    const lines = editedPlainText.split('\n');
+    let colorIdx = 0;
+    formatted = lines
+      .map((line) => {
+        if (!line.trim()) return line;
+        return line
+          .split(/(\s+)/)
+          .map((token) => {
+            if (!token || /^\s+$/.test(token)) return token;
+            const c = fontColors[colorIdx % fontColors.length];
+            colorIdx++;
+            return `<font color="${c}">${token}</font>`;
+          })
+          .join('');
+      })
+      .join('\n');
+  }
+
+  if (hadUnderline) formatted = `<u>${formatted}</u>`;
+  if (hadItalic) formatted = `<i>${formatted}</i>`;
+  if (hadBold) formatted = `<b>${formatted}</b>`;
+
+  return `${assPrefix}${formatted}`;
+}
+
 export interface FormattedPreviewResult {
   html: string;
   plain: string;

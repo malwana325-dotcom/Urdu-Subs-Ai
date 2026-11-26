@@ -6,6 +6,7 @@ interface RightEdgeDrawerShellProps {
   isOpen: boolean;
   onClose: () => void;
   widthClass?: string;
+  roleVariant?: 'info' | 'ai' | 'edit' | 'style' | 'export' | 'timing' | 'danger';
   children: React.ReactNode;
 }
 
@@ -13,6 +14,7 @@ export const RightEdgeDrawerShell: React.FC<RightEdgeDrawerShellProps> = ({
   isOpen,
   onClose,
   widthClass = 'w-[min(92vw,375px)]',
+  roleVariant,
   children,
 }) => {
   const [dragOffsetX, setDragOffsetX] = useState(0);
@@ -100,8 +102,8 @@ export const RightEdgeDrawerShell: React.FC<RightEdgeDrawerShellProps> = ({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.18, ease: [0.2, 0, 0, 1] }}
-            className="fixed inset-0 bg-black/45 backdrop-blur-[2px] backdrop-touch-lock"
+            transition={{ duration: 0.14, ease: [0.16, 1, 0.3, 1] }}
+            className="fixed inset-0 bg-black/48 backdrop-touch-lock"
             onClick={(e) => {
               e.stopPropagation();
               onClose();
@@ -121,13 +123,15 @@ export const RightEdgeDrawerShell: React.FC<RightEdgeDrawerShellProps> = ({
             transition={
               dragOffsetX > 0
                 ? { duration: 0 }
-                : { duration: 0.22, ease: [0.2, 0, 0, 1] }
+                : { type: 'spring', stiffness: 460, damping: 38, mass: 0.85 }
             }
             onTouchStart={handleTouchStart}
             onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
             onTouchCancel={handleTouchEnd}
-            className={`relative z-10 h-[100dvh] ${widthClass} border-l shadow-2xl flex flex-col pt-safe pb-safe will-change-transform`}
+            className={`relative z-10 h-[100dvh] ${widthClass} border-l shadow-2xl flex flex-col pt-safe pb-safe will-change-transform ${
+              roleVariant ? `mc-popup mc-role-${roleVariant}` : ''
+            }`}
             style={{
               backgroundColor: 'var(--theme-surface)',
               borderColor: 'var(--theme-border)',

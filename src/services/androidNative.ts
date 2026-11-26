@@ -56,6 +56,7 @@ interface AndroidHostBridgeApi {
   getSelectedExportFolderJson?: () => string;
   clearSelectedExportFolder?: () => void;
   writeFileToSelectedFolder?: (fileName: string, content: string, mimeType: string) => string;
+  writeFileToSelectedFolderInSubfolder?: (fileName: string, content: string, mimeType: string, subFolder: string) => string;
 }
 
 declare global {
@@ -388,7 +389,8 @@ function guessMimeType(fileName: string): string {
   if (lower.endsWith('.json')) return 'application/json';
   if (lower.endsWith('.vtt')) return 'text/vtt';
   if (lower.endsWith('.srt')) return 'application/x-subrip';
-  return 'text/plain';
+  if (lower.endsWith('.txt')) return 'text/plain';
+  return 'application/octet-stream';
 }
 
 export async function shareExportedAndroidSubtitle(fileName: string, content: string): Promise<boolean> {
@@ -423,8 +425,10 @@ export async function exportSubtitleNativeAndroid(options: {
   fileName: string;
   content: string;
   saveMode: AndroidSaveMode;
+  subFolder?: string;
 }): Promise<NativeAndroidExportResult> {
   const safeName = (options.fileName || 'subtitles.srt').replace(/[\\/:*?"<>|]/g, '_');
+  const safeSubFolder = (options.subFolder || '').replace(/[\\/:*?"<>|]/g, '_').trim();
   const bomContent = options.content.startsWith('\ufeff') ? options.content : `\ufeff${options.content}`;
   const bridge = getHostBridge();
 
@@ -434,14 +438,24 @@ export async function exportSubtitleNativeAndroid(options: {
   let shareUri: string | undefined;
 
   if (options.saveMode === 'documents' || options.saveMode === 'documents-and-share') {
-    // 1. Prefer user-chosen Android Export Folder (SAF ACTION_OPEN_DOCUMENT_TREE)
+    // 1. Prefer user-chosen Android Export Folder (SAF ACTION_OPEN_DOCUMENT_TREE) with automatic subfolder creation
     const selectedFolder = getSelectedAndroidExportFolder();
-    if (selectedFolder && bridge?.writeFileToSelectedFolder) {
+    if (selectedFolder && (bridge?.writeFileToSelectedFolderInSubfolder || bridge?.writeFileToSelectedFolder)) {
       try {
-        const rawRes = bridge.writeFileToSelectedFolder(safeName, bomContent, guessMimeType(safeName));
+        const rawRes =
+          bridge.writeFileToSelectedFolderInSubfolder
+            ? bridge.writeFileToSelectedFolderInSubfolder(
+                safeName,
+                bomContent,
+                guessMimeType(safeName),
+                safeSubFolder
+              )
+            : bridge.writeFileToSelectedFolder!(safeName, bomContent, guessMimeType(safeName));
         const parsed = JSON.parse(rawRes || '{}');
         if (parsed?.success) {
-          savedFolderName = String(parsed.folderName || selectedFolder.name);
+          savedFolderName = String(
+            parsed.folderName || (safeSubFolder ? `${selectedFolder.name}/${safeSubFolder}` : selectedFolder.name)
+          );
           savedRelativePath = `${savedFolderName}/${safeName}`;
           savedUri = parsed.uri;
         }
@@ -450,17 +464,18 @@ export async function exportSubtitleNativeAndroid(options: {
       }
     }
 
-    // 2. Fallback to Documents/UrduLocalizer if no custom SAF folder was picked
+    // 2. Fallback to Documents/UrduLocalizer[/<subFolder>] if no custom SAF folder was picked
     if (!savedRelativePath) {
       const permSnapshot = await getAndroidPermissionSnapshot();
       if (permSnapshot.needsRuntimePrompt) {
         await requestAndroidStoragePermission();
       }
 
-      const targetPath = `UrduLocalizer/${safeName}`;
+      const relDir = safeSubFolder ? `UrduLocalizer/${safeSubFolder}` : 'UrduLocalizer';
+      const targetPath = `${relDir}/${safeName}`;
       try {
         await Filesystem.mkdir({
-          path: 'UrduLocalizer',
+          path: relDir,
           directory: Directory.Documents,
           recursive: true,
         }).catch(() => {});
@@ -473,12 +488,17 @@ export async function exportSubtitleNativeAndroid(options: {
           recursive: true,
         });
 
-        savedFolderName = 'Documents/UrduLocalizer';
-        savedRelativePath = `Documents/UrduLocalizer/${safeName}`;
+        savedFolderName = `Documents/${relDir}`;
+        savedRelativePath = `Documents/${targetPath}`;
         savedUri = writeRes.uri;
         shareUri = writeRes.uri;
       } catch {
         try {
+          await Filesystem.mkdir({
+            path: relDir,
+            directory: Directory.External,
+            recursive: true,
+          }).catch(() => {});
           const extRes = await Filesystem.writeFile({
             path: targetPath,
             data: bomContent,
@@ -486,7 +506,7 @@ export async function exportSubtitleNativeAndroid(options: {
             encoding: Encoding.UTF8,
             recursive: true,
           });
-          savedFolderName = 'Android/data/com.urdudubber.app/files/UrduLocalizer';
+          savedFolderName = `Android/data/com.urdudubber.app/files/${relDir}`;
           savedRelativePath = `${savedFolderName}/${safeName}`;
           savedUri = extRes.uri;
           shareUri = extRes.uri;
@@ -573,12 +593,17 @@ export async function exportSubtitleNativeAndroid(options: {
   };
 }
 
-export async function syncAndroidStatusBarTheme(isLightTheme: boolean): Promise<void> {
+export async function syncAndroidStatusBarTheme(
+  isLightTheme: boolean,
+  statusBarColor?: string
+): Promise<void> {
   if (!isNativeAndroid()) return;
   try {
     await StatusBar.setOverlaysWebView({ overlay: false });
     await StatusBar.setStyle({ style: isLightTheme ? Style.Light : Style.Dark });
-    await StatusBar.setBackgroundColor({ color: isLightTheme ? '#f8fafc' : '#090a0d' });
+    await StatusBar.setBackgroundColor({
+      color: statusBarColor || (isLightTheme ? '#f8fafc' : '#090b1a'),
+    });
   } catch {
     // Ignore StatusBar errors on unsupported OS versions
   }

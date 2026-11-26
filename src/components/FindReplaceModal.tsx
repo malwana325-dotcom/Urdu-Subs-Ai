@@ -294,19 +294,19 @@ export const FindReplaceModal: React.FC<FindReplaceModalProps> = ({
   const filteredOccurrences = occurrences.filter((o) => previewFilter === 'all' || o.field === previewFilter);
 
   return (
-    <div className="fixed inset-0 z-[120] flex items-center justify-center p-2.5 sm:p-4 bg-black/75 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[120] flex items-center justify-center p-2.5 sm:p-4 bg-black/58 backdrop-touch-lock">
       <div
-        className="border rounded-xl shadow-2xl max-w-[calc(100vw-20px)] sm:max-w-4xl w-full max-h-[calc(100dvh-20px)] overflow-hidden flex flex-col text-xs"
+        className="border rounded-xl shadow-2xl max-w-[calc(100vw-20px)] sm:max-w-4xl w-full max-h-[calc(100dvh-20px)] overflow-hidden flex flex-col text-xs anim-pop-in mc-popup mc-role-edit"
         style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)', color: 'var(--theme-text)' }}
       >
         {/* Header */}
         <div
-          className="px-3.5 py-2.5 border-b flex items-center justify-between gap-2 shrink-0"
+          className="px-3.5 py-2.5 border-b flex items-center justify-between gap-2 shrink-0 mc-popup-header"
           style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
         >
           <div className="flex items-center gap-2 min-w-0">
-            <Replace size={15} style={{ color: 'var(--theme-accent)' }} />
-            <h3 className="font-semibold text-sm truncate">Find & Replace</h3>
+            <Replace size={15} style={{ color: 'var(--theme-accent)' }} className="mc-popup-title" />
+            <h3 className="font-semibold text-sm truncate mc-popup-title">Find & Replace</h3>
             <InfoPopover
               title="Find & Replace Studio"
               description="Live match highlighting across Original, AI, or Google columns with regex support and session Undo/Redo before applying."
@@ -592,7 +592,7 @@ export const FindReplaceModal: React.FC<FindReplaceModalProps> = ({
 
         {/* Footer */}
         <div
-          className="px-3.5 py-2.5 border-t flex flex-wrap items-center justify-between gap-2 shrink-0"
+          className="px-3.5 py-2.5 border-t flex flex-wrap items-center justify-between gap-2 shrink-0 mc-popup-footer"
           style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
         >
           <span className="text-[11px] opacity-75 tabular-nums">

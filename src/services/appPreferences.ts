@@ -1,4 +1,4 @@
-import { AppTheme } from '../components/ThemeSelector';
+import { AppTheme, isLightAppTheme } from '../components/ThemeSelector';
 import { SubtitleItem } from '../utils/srtParser';
 import type { AndroidSaveMode } from './androidNative';
 
@@ -61,6 +61,14 @@ export interface DeveloperSettings {
   customBgCss: string;
   customSurfaceCss: string;
   customAccentHex: string;
+  customHeaderBorderCss?: string;
+  customHeaderTitleCss?: string;
+  customFooterBorderCss?: string;
+  customFooterTitleCss?: string;
+  customPopupBorderCss?: string;
+  customPopupTitleCss?: string;
+  customDropdownBorderCss?: string;
+  customDropdownTitleCss?: string;
   uiFontFamily: string;
 }
 
@@ -74,6 +82,7 @@ export interface GlossaryEntry {
 export interface AppPreferences {
   uiZoom: number; // 50 to 200
   theme: AppTheme;
+  multicoloredLayout: boolean;
   defaultStartupTab: MobileTab;
   mobileSubtitleView: MobileSubtitleView;
   containerSize: ContainerSize;
@@ -89,6 +98,8 @@ export interface AppPreferences {
   defaultPageSize: number; // 25 | 50 | 100 | 0
   googleRoutingMode: GoogleRoutingMode;
   androidSaveMode: AndroidSaveMode;
+  autoCategorizeExportFolders: boolean;
+  autoTagExportFileNames: boolean;
 }
 
 export const DEFAULT_DEVELOPER_SETTINGS: DeveloperSettings = {
@@ -99,12 +110,21 @@ export const DEFAULT_DEVELOPER_SETTINGS: DeveloperSettings = {
   customBgCss: '',
   customSurfaceCss: '',
   customAccentHex: '',
+  customHeaderBorderCss: '',
+  customHeaderTitleCss: '',
+  customFooterBorderCss: '',
+  customFooterTitleCss: '',
+  customPopupBorderCss: '',
+  customPopupTitleCss: '',
+  customDropdownBorderCss: '',
+  customDropdownTitleCss: '',
   uiFontFamily: UI_FONT_OPTIONS[0].value,
 };
 
 export const DEFAULT_APP_PREFERENCES: AppPreferences = {
   uiZoom: 100,
-  theme: 'cinematic',
+  theme: 'aurora',
+  multicoloredLayout: true,
   defaultStartupTab: 'home',
   mobileSubtitleView: 'table',
   containerSize: 'standard',
@@ -139,9 +159,11 @@ export const DEFAULT_APP_PREFERENCES: AppPreferences = {
   },
   developerSettings: DEFAULT_DEVELOPER_SETTINGS,
   defaultReadOnly: true,
-  defaultPageSize: 50,
+  defaultPageSize: 0,
   googleRoutingMode: 'hybrid',
   androidSaveMode: 'documents',
+  autoCategorizeExportFolders: true,
+  autoTagExportFileNames: true,
 };
 
 const PREFS_STORAGE_KEY = 'urdu_dubber_app_prefs_v1';
@@ -169,7 +191,10 @@ export function loadAppPreferences(): AppPreferences {
     const raw = localStorage.getItem(PREFS_STORAGE_KEY);
     if (!raw) {
       const legacyTheme = localStorage.getItem('applet_theme') as AppTheme | null;
-      if (legacyTheme && ['classic', 'cinematic', 'cyber', 'neon', 'sapphire', 'amber'].includes(legacyTheme)) {
+      if (
+        legacyTheme &&
+        ['aurora', 'prism', 'sunset', 'classic', 'cinematic', 'cyber', 'neon', 'sapphire', 'amber'].includes(legacyTheme)
+      ) {
         return { ...DEFAULT_APP_PREFERENCES, theme: legacyTheme };
       }
       return DEFAULT_APP_PREFERENCES;
@@ -216,6 +241,9 @@ export function loadAppPreferences(): AppPreferences {
         parsed?.androidSaveMode === 'share'
           ? parsed.androidSaveMode
           : 'documents',
+      autoCategorizeExportFolders: parsed?.autoCategorizeExportFolders ?? true,
+      autoTagExportFileNames: parsed?.autoTagExportFileNames ?? true,
+      multicoloredLayout: parsed?.multicoloredLayout ?? true,
     };
   } catch {
     return DEFAULT_APP_PREFERENCES;
@@ -260,7 +288,8 @@ export function applyPreferencesToDOM(prefs: AppPreferences): void {
 
   root.setAttribute('data-container-size', paddingToContainerSize(padPx));
   root.setAttribute('data-app-theme', prefs.theme);
-  if (prefs.theme !== 'classic') {
+  root.setAttribute('data-multicolor', (prefs.multicoloredLayout ?? true) ? 'true' : 'false');
+  if (!isLightAppTheme(prefs.theme)) {
     root.classList.add('dark');
   } else {
     root.classList.remove('dark');
@@ -300,6 +329,28 @@ export function applyPreferencesToDOM(prefs: AppPreferences): void {
     root.style.removeProperty('--theme-accent-text');
     root.style.removeProperty('--theme-accent-soft');
   }
+
+  const optionalTokenMap: Array<[string | undefined, string[]]> = [
+    [dev.customHeaderBorderCss, ['--theme-header-border']],
+    [dev.customHeaderTitleCss, ['--theme-header-title']],
+    [dev.customFooterBorderCss, ['--theme-footer-border']],
+    [dev.customFooterTitleCss, ['--theme-footer-title']],
+    [dev.customPopupBorderCss, ['--theme-popup-border', '--theme-custom-popup-border']],
+    [dev.customPopupTitleCss, ['--theme-popup-title', '--theme-custom-popup-title']],
+    [dev.customDropdownBorderCss, ['--theme-dropdown-border', '--theme-custom-dropdown-border']],
+    [dev.customDropdownTitleCss, ['--theme-dropdown-title', '--theme-custom-dropdown-title']],
+  ];
+
+  optionalTokenMap.forEach(([val, cssVars]) => {
+    const trimmed = val?.trim();
+    cssVars.forEach((cssVar) => {
+      if (trimmed) {
+        root.style.setProperty(cssVar, trimmed);
+      } else {
+        root.style.removeProperty(cssVar);
+      }
+    });
+  });
 
   if (dev.uiFontFamily && dev.uiFontFamily.trim()) {
     root.style.setProperty('--ui-font', dev.uiFontFamily.trim());

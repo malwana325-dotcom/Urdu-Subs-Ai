@@ -1,6 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { cn } from '../utils/cn';
 import { detectLineDirection } from './FormattedRichText';
+import {
+  formatSubtitlePreview,
+  hasFormatting,
+  reapplyFormattingTemplate,
+  toCleanEditableText,
+} from '../utils/subtitleFormatter';
 
 interface SubtitleRowEditableCellProps {
   value: string;
@@ -35,8 +41,9 @@ export const SubtitleRowEditableCell: React.FC<SubtitleRowEditableCellProps> = (
   onLongPress,
   editTriggerNonce,
 }) => {
+  const cleanEditableSource = useMemo(() => toCleanEditableText(value || ''), [value]);
   const [isEditing, setIsEditing] = useState(false);
-  const [draftValue, setDraftValue] = useState(value);
+  const [draftValue, setDraftValue] = useState(cleanEditableSource);
   const isTypingRef = useRef(false);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
@@ -45,9 +52,9 @@ export const SubtitleRowEditableCell: React.FC<SubtitleRowEditableCellProps> = (
 
   useEffect(() => {
     if (!isTypingRef.current) {
-      setDraftValue(value);
+      setDraftValue(cleanEditableSource);
     }
-  }, [value]);
+  }, [cleanEditableSource]);
 
   useEffect(() => {
     if (
@@ -56,10 +63,11 @@ export const SubtitleRowEditableCell: React.FC<SubtitleRowEditableCellProps> = (
     ) {
       lastEditTriggerRef.current = editTriggerNonce;
       if (!isReadOnly) {
+        setDraftValue(cleanEditableSource);
         setIsEditing(true);
       }
     }
-  }, [editTriggerNonce, isReadOnly]);
+  }, [editTriggerNonce, isReadOnly, cleanEditableSource]);
 
   useEffect(() => {
     return () => {
@@ -111,25 +119,28 @@ export const SubtitleRowEditableCell: React.FC<SubtitleRowEditableCellProps> = (
     onLongPress({ x: e.clientX, y: e.clientY });
   };
 
-  const handleBlur = () => {
+  const commitCleanDraft = () => {
     isTypingRef.current = false;
     setIsEditing(false);
-    if (draftValue !== value) {
-      onCommit(draftValue);
+    if (draftValue !== cleanEditableSource) {
+      const nextValue = hasFormatting(value || '')
+        ? reapplyFormattingTemplate(value || '', draftValue)
+        : draftValue;
+      onCommit(nextValue);
     }
+  };
+
+  const handleBlur = () => {
+    commitCleanDraft();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      isTypingRef.current = false;
-      setIsEditing(false);
-      if (draftValue !== value) {
-        onCommit(draftValue);
-      }
+      commitCleanDraft();
     } else if (e.key === 'Escape') {
       isTypingRef.current = false;
-      setDraftValue(value);
+      setDraftValue(cleanEditableSource);
       setIsEditing(false);
     }
   };
@@ -139,7 +150,15 @@ export const SubtitleRowEditableCell: React.FC<SubtitleRowEditableCellProps> = (
     setDraftValue(e.target.value);
   };
 
-  const activeText = isEditing ? draftValue : value || '';
+  const sanitizedDisplayHtml = useMemo(() => {
+    if (!displayHtml) return null;
+    if (/\{[^}]+\}/.test(displayHtml)) {
+      return formatSubtitlePreview(displayHtml, cleanEditableSource).html;
+    }
+    return displayHtml;
+  }, [displayHtml, cleanEditableSource]);
+
+  const activeText = isEditing ? draftValue : cleanEditableSource;
   const detectedDominantDir: 'rtl' | 'ltr' =
     dir === 'rtl' || dir === 'ltr'
       ? dir
@@ -199,11 +218,11 @@ export const SubtitleRowEditableCell: React.FC<SubtitleRowEditableCellProps> = (
           ...style,
         }}
         dir={detectedDominantDir}
-        dangerouslySetInnerHTML={displayHtml ? { __html: displayHtml } : undefined}
+        dangerouslySetInnerHTML={sanitizedDisplayHtml ? { __html: sanitizedDisplayHtml } : undefined}
       >
-        {!displayHtml
-          ? value
-            ? renderAlignedPlainText(value)
+        {!sanitizedDisplayHtml
+          ? cleanEditableSource
+            ? renderAlignedPlainText(cleanEditableSource)
             : (
               <span
                 className={cn(
@@ -237,8 +256,7 @@ export const SubtitleRowEditableCell: React.FC<SubtitleRowEditableCellProps> = (
           dir={detectedDominantDir}
           className={cn(
             'w-full leading-[1.55] px-1.5 py-1 border rounded-lg resize-none overflow-x-auto overflow-y-auto overscroll-auto focus:outline-none transition-[width,border-color]',
-            detectedDominantDir === 'rtl' ? 'text-right' : 'text-left',
-            className
+            detectedDominantDir === 'rtl' ? 'text-right font-urdu' : 'text-left font-sans'
           )}
           style={{
             fontSize: `${fontSize}px`,
@@ -249,6 +267,7 @@ export const SubtitleRowEditableCell: React.FC<SubtitleRowEditableCellProps> = (
             backgroundColor: 'var(--theme-elevated)',
             borderColor: 'var(--theme-accent)',
             color: 'var(--theme-text)',
+            WebkitTextFillColor: 'var(--theme-text)',
             touchAction: 'pan-x pan-y',
           }}
         />
@@ -276,6 +295,7 @@ export const SubtitleRowEditableCell: React.FC<SubtitleRowEditableCellProps> = (
           justLongPressedRef.current = false;
           return;
         }
+        setDraftValue(cleanEditableSource);
         setIsEditing(true);
       }}
       onTouchStart={handleTouchStart}
@@ -298,14 +318,14 @@ export const SubtitleRowEditableCell: React.FC<SubtitleRowEditableCellProps> = (
       }}
       dir={detectedDominantDir}
     >
-      {displayHtml ? (
+      {sanitizedDisplayHtml ? (
         <div
           dir={detectedDominantDir}
           className={cn('w-full block', detectedDominantDir === 'rtl' ? 'text-right' : 'text-left')}
-          dangerouslySetInnerHTML={{ __html: displayHtml }}
+          dangerouslySetInnerHTML={{ __html: sanitizedDisplayHtml }}
         />
-      ) : value ? (
-        renderAlignedPlainText(value)
+      ) : cleanEditableSource ? (
+        renderAlignedPlainText(cleanEditableSource)
       ) : (
         <span
           className={cn(

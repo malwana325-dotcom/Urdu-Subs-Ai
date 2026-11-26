@@ -889,11 +889,11 @@ export const SubtitleEditorModal: React.FC<SubtitleEditorModalProps> = ({
     >
       {/* Slim Header: Block Count, Single-Stream Selector & Close */}
       <header
-        className="px-2.5 sm:px-4 h-10 border-b flex items-center justify-between gap-2 shrink-0"
+        className="px-2.5 sm:px-4 h-10 border-b flex items-center justify-between gap-2 shrink-0 mc-header"
         style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
       >
         <div className="flex items-center gap-1.5 min-w-0">
-          <span className="text-[11px] font-mono font-semibold tabular-nums opacity-75 shrink-0">
+          <span className="text-[11px] font-mono font-semibold tabular-nums opacity-75 shrink-0 mc-header-title">
             {targetBlockForUndo ? `#${targetBlockForUndo}/` : ''}
             {localSubtitles.length}L
           </span>
@@ -959,7 +959,7 @@ export const SubtitleEditorModal: React.FC<SubtitleEditorModalProps> = ({
               borderColor: 'var(--theme-border)',
               color: 'var(--theme-text)',
             }}
-            className="fixed z-[135] rounded-xl border shadow-xl p-1.5 space-y-0.5 overflow-y-auto overscroll-contain"
+            className="fixed z-[135] rounded-xl border shadow-xl p-1.5 space-y-0.5 overflow-y-auto overscroll-contain mc-popup mc-role-edit"
           >
             <button
               type="button"
@@ -1103,7 +1103,7 @@ export const SubtitleEditorModal: React.FC<SubtitleEditorModalProps> = ({
 
       {/* Bottom Bar (Docked Above Soft Keyboard): Text Actions + Undo/Redo + Find + Tools + Pagination + Save */}
       <footer
-        className="border-t shrink-0"
+        className="border-t shrink-0 mc-footer"
         style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
       >
         {/* Text Editing Action Strip */}

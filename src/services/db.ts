@@ -54,11 +54,33 @@ export interface AppState {
   pageSize?: number;
   activeDraftId?: string | null;
   hasAppliedCustomStyle?: boolean;
+  editedInApp?: boolean;
+  syncedBaseTitle?: string;
+}
+
+export type ProjectListPlacement = 'auto' | 'translated' | 'drafts' | 'my-subtitles';
+
+export interface ProjectDraftVersion {
+  versionNumber: number;
+  savedAt: string;
+  summary?: string;
+  subtitleCount: number;
+  translatedCount: number;
+  googleCount?: number;
+  isCompleted?: boolean;
+  editedInApp?: boolean;
+  hasAppliedCustomStyle?: boolean;
+  subtitles: SubtitleItem[];
+  context: string;
+  customPrompt: string;
+  translationSettings?: any;
+  activeStylingConfig?: any;
 }
 
 export interface ProjectDraft {
   id: string;
   title: string;
+  isRenamedTitle?: boolean;
   fileName: string;
   detectedFormat: string;
   sourceType: 'local' | 'url' | 'demo';
@@ -68,12 +90,16 @@ export interface ProjectDraft {
   translatedCount: number;
   googleCount?: number;
   isCompleted?: boolean;
+  editedInApp?: boolean;
+  hasAppliedCustomStyle?: boolean;
+  categoryPlacement?: ProjectListPlacement;
   tags?: string[];
   subtitles: SubtitleItem[];
   context: string;
   customPrompt: string;
   translationSettings?: any;
   activeStylingConfig?: any;
+  versions?: ProjectDraftVersion[];
 }
 
 export interface CrashSnapshot {
@@ -112,6 +138,7 @@ export interface DetailedStorageBreakdown extends StorageStats {
 export interface StoredSubtitleFile {
   id: string;
   name: string;
+  displayName?: string;
   folderName: string;
   relativePath: string;
   format: string;
@@ -119,6 +146,12 @@ export interface StoredSubtitleFile {
   lastModified: number;
   content: string;
   addedAt: string;
+  sourceKind?: 'folder' | 'exported' | 'edited';
+  subFolder?: string;
+  tags?: string[];
+  isCompleted?: boolean;
+  draftId?: string;
+  categoryPlacement?: ProjectListPlacement;
 }
 
 const DB_NAME = 'UrduLocalizerDB';

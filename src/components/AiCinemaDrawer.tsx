@@ -19,12 +19,15 @@ import {
 import { GeminiService } from '../services/gemini';
 import { cn } from '../utils/cn';
 import { InfoPopover } from './InfoPopover';
+import { ResponsiveLazyImage } from './ResponsiveLazyImage';
+import cinemaInsightsBanner from '../assets/images/cinema_insights_banner_1795665459138.jpg';
 
 interface AiCinemaDrawerProps {
   isOpen: boolean;
   onClose: () => void;
   geminiService: GeminiService | null;
   isGeminiConnected: boolean;
+  isHeavyTranslationActive?: boolean;
   onApplyContext: (contextText: string) => void;
   onAddLog: (msg: string, type: 'info' | 'success' | 'warning' | 'error') => void;
   onAddNotification: (msg: string, type: 'success' | 'error') => void;
@@ -53,6 +56,7 @@ export const AiCinemaDrawer: React.FC<AiCinemaDrawerProps> = ({
   onClose,
   geminiService,
   isGeminiConnected,
+  isHeavyTranslationActive = false,
   onApplyContext,
   onAddLog,
   onAddNotification,
@@ -130,19 +134,19 @@ export const AiCinemaDrawer: React.FC<AiCinemaDrawerProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[125] flex items-center justify-center p-2.5 sm:p-4 bg-black/75 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[125] flex items-center justify-center p-2.5 sm:p-4 bg-black/58 backdrop-touch-lock">
       <div
-        className="border rounded-xl shadow-2xl max-w-[calc(100vw-20px)] sm:max-w-2xl w-full max-h-[calc(100dvh-20px)] flex flex-col overflow-hidden text-xs"
+        className="border rounded-xl shadow-2xl max-w-[calc(100vw-20px)] sm:max-w-2xl w-full max-h-[calc(100dvh-20px)] flex flex-col overflow-hidden text-xs anim-pop-in mc-popup mc-role-ai"
         style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)', color: 'var(--theme-text)' }}
       >
         {/* Header */}
         <div
-          className="px-3.5 py-2.5 border-b flex items-center justify-between gap-2 shrink-0"
+          className="px-3.5 py-2.5 border-b flex items-center justify-between gap-2 shrink-0 mc-popup-header"
           style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
         >
           <div className="flex items-center gap-2 min-w-0">
-            <Clapperboard size={15} style={{ color: 'var(--theme-accent)' }} />
-            <h2 className="font-semibold text-sm truncate">AI Cinema Studio</h2>
+            <Clapperboard size={15} style={{ color: 'var(--theme-accent)' }} className="mc-popup-title" />
+            <h2 className="font-semibold text-sm truncate mc-popup-title">AI Cinema Studio</h2>
             <InfoPopover
               title="AI Cinema Studio"
               description="Generate story summaries, character arcs, and dialogue localization context for any movie or TV series, then inject it directly into Translator Context."
@@ -155,6 +159,29 @@ export const AiCinemaDrawer: React.FC<AiCinemaDrawerProps> = ({
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-3.5 space-y-3">
+          <ResponsiveLazyImage
+            src={cinemaInsightsBanner}
+            alt="AI Cinema Screening Room Backdrop"
+            aspectRatio="16/9"
+            sizes="(max-width: 640px) 100vw, 640px"
+            deferDuringHeavyWork={isHeavyTranslationActive}
+            overlayScrim
+            fallbackIcon={<Clapperboard size={20} className="text-white/85" />}
+            fallbackTitle="AI Cinema Insights"
+            className="w-full h-28 sm:h-36 rounded-xl border border-white/10"
+          >
+            <div className="absolute inset-x-0 bottom-0 p-3 flex items-end justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-xs sm:text-sm font-semibold text-white truncate">
+                  {activeMovieTitle || 'Story, Characters & Dialogue Tone'}
+                </p>
+                <p className="text-[10.5px] text-white/75 truncate">
+                  Fetch real cinema context for accurate Urdu gender &amp; formality
+                </p>
+              </div>
+            </div>
+          </ResponsiveLazyImage>
+
           <div className="flex gap-1.5">
             <div className="relative flex-1">
               <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 opacity-50" />

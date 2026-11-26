@@ -101,18 +101,18 @@ export const WatermarkModal: React.FC<WatermarkModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-[125] flex items-center justify-center p-3 bg-black/75 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[125] flex items-center justify-center p-3 bg-black/58 backdrop-touch-lock">
       <div
-        className="border rounded-xl shadow-2xl max-w-[calc(100vw-24px)] sm:max-w-lg w-full max-h-[calc(100dvh-24px)] overflow-hidden flex flex-col text-xs"
+        className="border rounded-xl shadow-2xl max-w-[calc(100vw-24px)] sm:max-w-lg w-full max-h-[calc(100dvh-24px)] overflow-hidden flex flex-col text-xs anim-pop-in mc-popup mc-role-style"
         style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)', color: 'var(--theme-text)' }}
       >
         <div
-          className="px-3.5 py-2.5 border-b flex items-center justify-between gap-2 shrink-0"
+          className="px-3.5 py-2.5 border-b flex items-center justify-between gap-2 shrink-0 mc-popup-header"
           style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
         >
           <div className="flex items-center gap-2">
-            <Stamp size={15} style={{ color: 'var(--theme-accent)' }} />
-            <h3 className="font-semibold text-sm">Row 1 Watermark</h3>
+            <Stamp size={15} style={{ color: 'var(--theme-accent)' }} className="mc-popup-title" />
+            <h3 className="font-semibold text-sm mc-popup-title">Row 1 Watermark</h3>
             <InfoPopover
               title="Block #1 Watermark"
               description="Update Row 1 or prepend a new 3-second intro block with your credit line across Original, AI, and Google columns."
@@ -218,7 +218,7 @@ export const WatermarkModal: React.FC<WatermarkModalProps> = ({
         </div>
 
         <div
-          className="px-3.5 py-2.5 border-t flex items-center justify-end gap-2 shrink-0"
+          className="px-3.5 py-2.5 border-t flex items-center justify-end gap-2 shrink-0 mc-popup-footer"
           style={{ backgroundColor: 'var(--theme-elevated)', borderColor: 'var(--theme-border)' }}
         >
           <button

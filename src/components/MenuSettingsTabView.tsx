@@ -42,6 +42,8 @@ import {
   ExternalLink,
   Wifi,
   FolderOpen,
+  Folder,
+  Tag,
 } from 'lucide-react';
 import {
   AndroidPermissionSnapshot,
@@ -92,10 +94,17 @@ import {
   PunctuationMode,
 } from '../services/translationSettings';
 import { CustomFontItem } from '../constants/fonts';
-import { APP_THEMES, AppTheme } from './ThemeSelector';
+import { APP_THEMES, AppTheme, isLightAppTheme } from './ThemeSelector';
 import { InfoPopover } from './InfoPopover';
 import { ConfirmDialogModal } from './ConfirmDialogModal';
 import { cn } from '../utils/cn';
+import {
+  AI_MODEL_CATALOG,
+  CustomAiModelConfig,
+  GOOGLE_ROUTING_MODES,
+  SOURCE_LANGUAGES,
+  resolveAiModel,
+} from '../services/aiProviders';
 
 export type SettingsCategoryId =
   | 'display'
@@ -106,32 +115,6 @@ export type SettingsCategoryId =
   | 'developer';
 
 export type TranslationSubMenuId = 'language' | 'ai' | 'google';
-
-const SOURCE_LANGUAGES = [
-  { code: 'auto', name: 'Auto-Detect' },
-  { code: 'en', name: 'English' },
-  { code: 'tr', name: 'Turkish (Türkçe)' },
-  { code: 'ko', name: 'Korean (한국어)' },
-  { code: 'hi', name: 'Hindi (हिन्दी)' },
-  { code: 'ar', name: 'Arabic (العربية)' },
-  { code: 'ja', name: 'Japanese (日本語)' },
-  { code: 'es', name: 'Spanish (Español)' },
-  { code: 'fa', name: 'Persian (فارسی)' },
-];
-
-const GEMINI_MODELS = [
-  { id: 'gemini-4-hydrogen', label: 'Gemini 4 Hydrogen / Flash' },
-  { id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash Lite' },
-  { id: 'gemini-4-neon', label: 'Gemini 4 Neon / Pro' },
-  { id: 'gemini-4-carbon', label: 'Gemini 4 Carbon' },
-  { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro Preview' },
-];
-
-const GOOGLE_ROUTING_MODES: { id: GoogleRoutingMode; label: string }[] = [
-  { id: 'hybrid', label: 'Hybrid (Cloud API + Web Fallback)' },
-  { id: 'web', label: 'Web Endpoint Only (Free)' },
-  { id: 'cloud', label: 'Google Cloud API Only' },
-];
 
 interface MenuSettingsTabViewProps {
   preferences: AppPreferences;
@@ -144,6 +127,7 @@ interface MenuSettingsTabViewProps {
   onUpdateTranslationSettings: (next: TranslationSettings) => void;
   selectedModel: string;
   onUpdateModel: (model: string) => void;
+  customModels?: CustomAiModelConfig[];
   geminiApiKey: string;
   onUpdateGeminiApiKey: (key: string) => void;
   onApplyGeminiApiKey: (key?: string) => void;
@@ -194,6 +178,7 @@ export const MenuSettingsTabView: React.FC<MenuSettingsTabViewProps> = ({
   onUpdateTranslationSettings,
   selectedModel,
   onUpdateModel,
+  customModels = [],
   geminiApiKey,
   onUpdateGeminiApiKey,
   onApplyGeminiApiKey,
@@ -236,6 +221,7 @@ export const MenuSettingsTabView: React.FC<MenuSettingsTabViewProps> = ({
   const [openRows, setOpenRows] = useState<Record<string, boolean>>({});
   const [showGeminiKey, setShowGeminiKey] = useState(false);
   const [showGoogleKey, setShowGoogleKey] = useState(false);
+  const [showKeyTutorial, setShowKeyTutorial] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState<{
     title: string;
     message: string;
@@ -377,7 +363,7 @@ export const MenuSettingsTabView: React.FC<MenuSettingsTabViewProps> = ({
     e.target.value = '';
   };
 
-  const isLightTheme = preferences.theme === 'classic';
+  const isLightTheme = isLightAppTheme(preferences.theme);
   const obsidianSurfaceStyle: React.CSSProperties = isLightTheme
     ? {
         backgroundColor: 'var(--theme-surface)',
@@ -385,8 +371,8 @@ export const MenuSettingsTabView: React.FC<MenuSettingsTabViewProps> = ({
         color: 'var(--theme-text)',
       }
     : {
-        backgroundColor: '#0c0e13',
-        borderColor: 'rgba(255, 255, 255, 0.08)',
+        backgroundColor: 'var(--theme-elevated)',
+        borderColor: 'var(--theme-border)',
         color: 'var(--theme-text)',
       };
 
@@ -397,8 +383,8 @@ export const MenuSettingsTabView: React.FC<MenuSettingsTabViewProps> = ({
         color: 'var(--theme-text)',
       }
     : {
-        backgroundColor: '#12151d',
-        borderColor: 'rgba(255, 255, 255, 0.08)',
+        backgroundColor: 'var(--theme-surface)',
+        borderColor: 'var(--theme-border)',
         color: 'var(--theme-text)',
       };
 
@@ -626,6 +612,7 @@ export const MenuSettingsTabView: React.FC<MenuSettingsTabViewProps> = ({
   const activeTargetLang =
     TARGET_LANGUAGES.find((l) => l.code === translationSettings.targetLanguage)?.name ||
     translationSettings.targetLanguage;
+  const resolvedActiveModel = resolveAiModel(selectedModel, customModels);
   const geminiKeySaved = Boolean(geminiApiKey.trim());
   const googleKeySaved = Boolean(googleApiKey.trim());
 
@@ -640,6 +627,18 @@ export const MenuSettingsTabView: React.FC<MenuSettingsTabViewProps> = ({
       onChange: (val) => onUpdatePreferences((prev) => ({ ...prev, theme: val as AppTheme })),
       options: APP_THEMES.map((t) => ({ value: t.id, label: `${t.name} (${t.category})` })),
       keywords: `${activeThemeName} palette dark light obsidian`,
+    }),
+
+    // 1b. Multicolored Layout Toggle
+    renderToggleRow({
+      id: 'multicoloredLayout',
+      title: 'Multicolored Layout',
+      subtitle: 'Distinct jewel-toned borders, titles, headers, dropdowns & role popups',
+      icon: Sparkles,
+      checked: preferences.multicoloredLayout ?? true,
+      onChange: (checked) =>
+        onUpdatePreferences((prev) => ({ ...prev, multicoloredLayout: checked })),
+      keywords: 'multicolor colorful vibrant borders headers footers dropdown popup rainbow',
     }),
 
     // 2. Subtitle View Mode
@@ -845,16 +844,19 @@ export const MenuSettingsTabView: React.FC<MenuSettingsTabViewProps> = ({
       keywords: 'sound effects brackets strip translate',
     }),
 
-    // 17. Gemini AI Model
+    // 17. Active AI Model
     renderSelectRow({
       id: 'selectedModel',
-      title: 'Gemini AI Model',
-      subtitle: 'Foundation model used for context & translation',
+      title: 'Active AI Model',
+      subtitle: 'Auto-syncs API key, link & tutorial to chosen provider',
       icon: Cpu,
       value: selectedModel,
       onChange: onUpdateModel,
-      options: GEMINI_MODELS.map((m) => ({ value: m.id, label: m.label })),
-      keywords: 'hydrogen neon carbon flash lite pro',
+      options: [
+        ...AI_MODEL_CATALOG.map((m) => ({ value: m.id, label: `${m.providerLabel} · ${m.name}` })),
+        ...customModels.map((c) => ({ value: c.id, label: `Custom · ${c.name} (${c.modelId})` })),
+      ],
+      keywords: 'hydrogen neon carbon flash lite pro openai gpt claude anthropic deepseek groq openrouter custom',
     }),
 
     // 18. Google Translate Routing Mode (Revived!)
@@ -1177,32 +1179,52 @@ export const MenuSettingsTabView: React.FC<MenuSettingsTabViewProps> = ({
       keywords: 'storage backup visibility',
     }),
 
-    // 32. Gemini API Key (Standalone / Custom Override)
+    // 32. Active Model API Key (Auto-synced per AI Model)
     renderExpandableRow({
       id: 'geminiApiKey',
-      title: 'Gemini API Key (Optional)',
-      valueLabel: geminiKeySaved ? 'Local Key Saved' : 'Server Proxy',
+      title: `${resolvedActiveModel.providerLabel} API Key`,
+      valueLabel: geminiKeySaved
+        ? 'Local Key Saved'
+        : resolvedActiveModel.supportsServerProxy
+        ? 'Server Proxy'
+        : resolvedActiveModel.requiresKey
+        ? 'Key Required'
+        : 'Free / Optional',
       icon: KeyRound,
-      statusDot: geminiKeySaved ? 'green' : 'neutral',
-      keywords: 'gemini api key secret apk standalone direct',
+      statusDot: geminiKeySaved ? 'green' : resolvedActiveModel.requiresKey ? 'amber' : 'neutral',
+      keywords: 'gemini openai claude deepseek groq openrouter custom api key secret apk standalone direct',
       children: (
         <>
-          <p className="text-[10.5px] opacity-70 leading-relaxed">
-            Leave blank to use the built-in server proxy. Add your own Gemini API key for standalone APK or direct browser calls.
-          </p>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <p className="text-[10.5px] opacity-75 leading-relaxed">
+              Active model: <span className="font-semibold">{resolvedActiveModel.name}</span>
+            </p>
+            {resolvedActiveModel.apiKeyUrl && (
+              <a
+                href={resolvedActiveModel.apiKeyUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[10.5px] font-semibold inline-flex items-center gap-1 hover:underline"
+                style={{ color: 'var(--theme-accent-text)' }}
+              >
+                <span>{resolvedActiveModel.apiKeyPortalLabel}</span>
+                <ExternalLink size={11} />
+              </a>
+            )}
+          </div>
           <div className="flex items-center gap-1.5">
             <div className="relative flex-1 min-w-0">
               <input
                 type={showGeminiKey ? 'text' : 'password'}
                 value={geminiApiKey}
                 onChange={(e) => onUpdateGeminiApiKey(e.target.value)}
-                placeholder="AIza... (optional standalone key)"
+                placeholder={resolvedActiveModel.keyPlaceholder}
                 className="w-full min-h-[36px] pl-2.5 pr-8 rounded-lg border text-[11px] font-mono"
                 style={obsidianSurfaceStyle}
               />
               <button
                 type="button"
-                aria-label={showGeminiKey ? 'Hide Gemini key' : 'Show Gemini key'}
+                aria-label={showGeminiKey ? 'Hide API key' : 'Show API key'}
                 onClick={() => setShowGeminiKey((v) => !v)}
                 className="absolute right-2 top-1/2 -translate-y-1/2 p-1 opacity-60 hover:opacity-100 cursor-pointer"
               >
@@ -1232,14 +1254,40 @@ export const MenuSettingsTabView: React.FC<MenuSettingsTabViewProps> = ({
               </button>
             )}
           </div>
+
+          <div className="rounded-lg border overflow-hidden" style={obsidianSurfaceStyle}>
+            <button
+              type="button"
+              onClick={() => setShowKeyTutorial((v) => !v)}
+              className="w-full min-h-[32px] px-2.5 py-1.5 flex items-center justify-between text-[10.5px] font-semibold cursor-pointer"
+            >
+              <span className="flex items-center gap-1.5">
+                <BookOpen size={12} style={{ color: 'var(--theme-accent)' }} />
+                <span>{resolvedActiveModel.tutorial.title}</span>
+              </span>
+              <ChevronDown size={13} className={cn('transition-transform', showKeyTutorial && 'rotate-180')} />
+            </button>
+            {showKeyTutorial && (
+              <div className="px-2.5 pb-2 pt-1.5 border-t text-[10px] space-y-1" style={{ borderColor: 'var(--theme-border)' }}>
+                <ol className="list-decimal pl-4 space-y-1 opacity-85">
+                  {resolvedActiveModel.tutorial.steps.map((s, idx) => (
+                    <li key={idx}>{s}</li>
+                  ))}
+                </ol>
+                {resolvedActiveModel.tutorial.note && (
+                  <p className="opacity-70 pt-1">Note: {resolvedActiveModel.tutorial.note}</p>
+                )}
+              </div>
+            )}
+          </div>
         </>
       ),
     }),
 
-    // 33. Gemini Engine Connection
+    // 33. AI Engine Connection
     renderExpandableRow({
       id: 'geminiConnection',
-      title: 'Gemini Engine Connection',
+      title: 'AI Engine Connection',
       valueLabel: isGeminiConnected ? 'Connected' : 'Disconnected',
       icon: Cpu,
       statusDot: isGeminiConnected ? 'green' : 'amber',
@@ -1251,7 +1299,7 @@ export const MenuSettingsTabView: React.FC<MenuSettingsTabViewProps> = ({
               {isGeminiConnected ? 'Active & Ready' : 'Not Connected'}
             </p>
             <p className="text-[10px] opacity-60 truncate">
-              Model: {selectedModel} · Mode: {geminiKeySaved ? 'Direct Key' : 'Server Proxy'}
+              {resolvedActiveModel.providerLabel} · {resolvedActiveModel.name} · {geminiKeySaved ? 'Direct Key' : resolvedActiveModel.supportsServerProxy ? 'Server Proxy' : 'Free/Keyless'}
             </p>
           </div>
           <button
@@ -1758,65 +1806,96 @@ export const MenuSettingsTabView: React.FC<MenuSettingsTabViewProps> = ({
     // 51. Custom Theme Colors
     renderExpandableRow({
       id: 'customColors',
-      title: 'Custom Theme Colors (BG / Surface / Accent)',
+      title: 'Custom Theme & Multicolor Overrides',
       valueLabel:
         preferences.developerSettings.customAccentHex ||
         preferences.developerSettings.customBgCss ||
+        preferences.developerSettings.customPopupBorderCss ||
+        preferences.developerSettings.customHeaderBorderCss ||
         'Theme Default',
       icon: Palette,
-      keywords: 'developer color picker hex background surface accent',
+      keywords: 'developer color picker hex background surface accent header footer dropdown popup border title',
       children: (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-          {[
-            {
-              label: 'Background',
-              key: 'customBgCss' as const,
-              fallback: '#090a0d',
-              val: preferences.developerSettings.customBgCss,
-            },
-            {
-              label: 'Surface',
-              key: 'customSurfaceCss' as const,
-              fallback: '#111318',
-              val: preferences.developerSettings.customSurfaceCss,
-            },
-            {
-              label: 'Accent',
-              key: 'customAccentHex' as const,
-              fallback: '#14b8a6',
-              val: preferences.developerSettings.customAccentHex,
-            },
-          ].map((item) => (
-            <div key={item.key} className="space-y-1">
-              <label className="text-[10px] font-semibold block">{item.label}</label>
-              <div className="flex items-center gap-1.5">
-                <input
-                  type="color"
-                  value={/^#[0-9a-fA-F]{6}$/.test(item.val) ? item.val : item.fallback}
-                  onChange={(e) =>
-                    onUpdatePreferences((prev) => ({
-                      ...prev,
-                      developerSettings: { ...prev.developerSettings, [item.key]: e.target.value },
-                    }))
-                  }
-                  className="w-8 h-8 rounded-md border cursor-pointer shrink-0"
-                />
-                <input
-                  type="text"
-                  value={item.val}
-                  onChange={(e) =>
-                    onUpdatePreferences((prev) => ({
-                      ...prev,
-                      developerSettings: { ...prev.developerSettings, [item.key]: e.target.value },
-                    }))
-                  }
-                  placeholder="Default"
-                  className="flex-1 min-w-0 min-h-[34px] px-2 rounded-lg border text-[10px] font-mono"
-                  style={obsidianSurfaceStyle}
-                />
-              </div>
-            </div>
-          ))}
+        <div className="space-y-2.5">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            {(
+              [
+                { label: 'Background', key: 'customBgCss', fallback: '#090a0d' },
+                { label: 'Surface', key: 'customSurfaceCss', fallback: '#111318' },
+                { label: 'Accent', key: 'customAccentHex', fallback: '#14b8a6' },
+                { label: 'Header Border', key: 'customHeaderBorderCss', fallback: '#38bdf8' },
+                { label: 'Header Title', key: 'customHeaderTitleCss', fallback: '#38bdf8' },
+                { label: 'Footer Border', key: 'customFooterBorderCss', fallback: '#a855f7' },
+                { label: 'Footer Title', key: 'customFooterTitleCss', fallback: '#c084fc' },
+                { label: 'Dropdown Border', key: 'customDropdownBorderCss', fallback: '#f59e0b' },
+                { label: 'Dropdown Title', key: 'customDropdownTitleCss', fallback: '#fbbf24' },
+                { label: 'Popup Border', key: 'customPopupBorderCss', fallback: '#ec4899' },
+                { label: 'Popup Title', key: 'customPopupTitleCss', fallback: '#f472b6' },
+              ] as const
+            ).map((item) => {
+              const val = preferences.developerSettings[item.key] || '';
+              return (
+                <div key={item.key} className="space-y-1">
+                  <label className="text-[10px] font-semibold block">{item.label}</label>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="color"
+                      value={/^#[0-9a-fA-F]{6}$/.test(val) ? val : item.fallback}
+                      onChange={(e) =>
+                        onUpdatePreferences((prev) => ({
+                          ...prev,
+                          developerSettings: { ...prev.developerSettings, [item.key]: e.target.value },
+                        }))
+                      }
+                      className="w-8 h-8 rounded-md border cursor-pointer shrink-0"
+                    />
+                    <input
+                      type="text"
+                      value={val}
+                      onChange={(e) =>
+                        onUpdatePreferences((prev) => ({
+                          ...prev,
+                          developerSettings: { ...prev.developerSettings, [item.key]: e.target.value },
+                        }))
+                      }
+                      placeholder="Default"
+                      className="flex-1 min-w-0 min-h-[34px] px-2 rounded-lg border text-[10px] font-mono"
+                      style={obsidianSurfaceStyle}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() =>
+                onUpdatePreferences((prev) => ({
+                  ...prev,
+                  developerSettings: {
+                    ...prev.developerSettings,
+                    customBgCss: '',
+                    customSurfaceCss: '',
+                    customAccentHex: '',
+                    customHeaderBorderCss: '',
+                    customHeaderTitleCss: '',
+                    customFooterBorderCss: '',
+                    customFooterTitleCss: '',
+                    customPopupBorderCss: '',
+                    customPopupTitleCss: '',
+                    customDropdownBorderCss: '',
+                    customDropdownTitleCss: '',
+                  },
+                }))
+              }
+              className="min-h-[30px] px-2.5 rounded-lg border text-[10.5px] font-semibold flex items-center gap-1 cursor-pointer btn-inch-cap"
+              style={obsidianSurfaceStyle}
+            >
+              <RotateCcw size={11} />
+              <span>Reset Custom Colors</span>
+            </button>
+          </div>
         </div>
       ),
     }),
@@ -1839,6 +1918,36 @@ export const MenuSettingsTabView: React.FC<MenuSettingsTabViewProps> = ({
         { value: 'share', label: 'Share / Save-As Only' },
       ],
       keywords: 'android export save folder documents share sheet apk',
+    }),
+
+    // 52b. Auto-Categorize Export Folders
+    renderToggleRow({
+      id: 'autoCategorizeExportFolders',
+      title: 'Auto-Categorize Export Folders',
+      subtitle: 'Route downloads to Urdu (AI), Urdu (Neutral), English, Bilingual folders',
+      icon: Folder,
+      checked: preferences.autoCategorizeExportFolders ?? true,
+      onChange: (val) =>
+        onUpdatePreferences((prev) => ({
+          ...prev,
+          autoCategorizeExportFolders: val,
+        })),
+      keywords: 'export subfolder urdu ai neutral english bilingual folder organize',
+    }),
+
+    // 52c. Auto-Tag Export Filenames
+    renderToggleRow({
+      id: 'autoTagExportFileNames',
+      title: 'Auto-Tag Export Filenames',
+      subtitle: 'Append [Urdu-AI], [Urdu-Neutral], [English], [Bilingual-AI] tags',
+      icon: Tag,
+      checked: preferences.autoTagExportFileNames ?? true,
+      onChange: (val) =>
+        onUpdatePreferences((prev) => ({
+          ...prev,
+          autoTagExportFileNames: val,
+        })),
+      keywords: 'filename tag export auto tag urdu english bilingual',
     }),
 
     // 53. Android Storage & File Permissions
@@ -2041,7 +2150,7 @@ export const MenuSettingsTabView: React.FC<MenuSettingsTabViewProps> = ({
                     <div className="space-y-1">
                       <div className="h-1.5 w-full rounded-full overflow-hidden bg-white/10">
                         <div
-                          className="h-full rounded-full transition-all"
+                          className="h-full rounded-full transition-[width] duration-200"
                           style={{
                             width: `${Math.max(2, quotaRatio)}%`,
                             backgroundColor: 'var(--theme-accent)',
@@ -2283,12 +2392,12 @@ export const MenuSettingsTabView: React.FC<MenuSettingsTabViewProps> = ({
     <div className="space-y-2.5 max-w-4xl mx-auto w-full">
       {/* Compact Un-Grouped Obsidian Header & Quick Filter */}
       <div
-        className="rounded-2xl border px-3 py-2.5 flex flex-wrap items-center justify-between gap-2"
+        className="rounded-2xl border px-3 py-2.5 flex flex-wrap items-center justify-between gap-2 mc-card-1"
         style={obsidianSurfaceStyle}
       >
         <div className="flex items-center gap-2 min-w-0">
-          <Sliders size={15} style={{ color: 'var(--theme-accent)' }} />
-          <h1 className="text-xs font-semibold truncate">Settings</h1>
+          <Sliders size={15} style={{ color: 'var(--theme-accent)' }} className="mc-card-icon" />
+          <h1 className="text-xs font-semibold truncate mc-card-title">Settings</h1>
           <span
             className="px-1.5 py-0.5 rounded-md border text-[10px] font-mono opacity-75 tabular-nums"
             style={obsidianInsetStyle}
@@ -2344,7 +2453,7 @@ export const MenuSettingsTabView: React.FC<MenuSettingsTabViewProps> = ({
       </div>
 
       {/* Flat Un-Grouped Obsidian Settings Stack */}
-      <div className="rounded-2xl border overflow-hidden shadow-lg" style={obsidianSurfaceStyle}>
+      <div className="rounded-2xl border overflow-hidden shadow-lg mc-card-2" style={obsidianSurfaceStyle}>
         {rows.length > 0 ? (
           rows
         ) : (
